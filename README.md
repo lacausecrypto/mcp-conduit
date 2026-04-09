@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/lacausecrypto/mcp-conduit/actions/workflows/ci.yml/badge.svg)](https://github.com/lacausecrypto/mcp-conduit/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/mcp-conduit.svg)](https://www.npmjs.com/package/mcp-conduit)
-[![npm downloads](https://img.shields.io/npm/dm/mcp-conduit.svg)](https://www.npmjs.com/package/mcp-conduit)
+[![npm downloads](https://img.shields.io/npm/dt/mcp-conduit.svg)](https://www.npmjs.com/package/mcp-conduit)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/Tests-1341%20passing-brightgreen.svg)](https://github.com/lacausecrypto/mcp-conduit/actions)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.8-blue.svg)](https://www.typescriptlang.org/)
