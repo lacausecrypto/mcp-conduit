@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0]: 2026-04-09
+
+### Added
+
+- **Windows compatibility**: full support for Windows (spawn shell resolution, process termination, path handling).
+- CI now tests on Ubuntu, Windows, and macOS.
+- Plugin path blocking for Windows system directories (`C:\Windows\`, `C:\Program Files\`).
+
+### Changed
+
+- `spawn()` uses `shell: true` + `windowsHide: true` on win32 to resolve `.cmd` executables (e.g., `npx.cmd`).
+- Process kill uses `TerminateProcess` on Windows instead of Unix signals (`SIGTERM`/`SIGKILL`).
+- `SIGHUP` handler is skipped on Windows. Use `POST /conduit/config/reload` instead.
+- CLI init wizard uses platform-aware temp directory (`C:\temp` on Windows, `/tmp` on Unix).
+
+## [1.0.0]: 2026-04-09
+
+Initial public release. See [release notes](https://github.com/lacausecrypto/mcp-conduit/releases/tag/v1.0.0).
+
 ## [0.2.0]: 2026-04-09
 
 ### Added

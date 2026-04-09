@@ -1,6 +1,6 @@
 {
   "name": "mcp-conduit",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Production-grade MCP gateway with caching, guardrails, plugins, and multi-server routing",
   "type": "module",
   "license": "MIT",

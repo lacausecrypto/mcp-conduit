@@ -23,7 +23,7 @@ import type { HttpRegistryBackend } from '../discovery/http-registry.js';
 import type { DiscoveredServer } from '../discovery/types.js';
 import { validateServerUrl } from '../utils/url-validator.js';
 
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 
 /** Security headers applied to all admin responses */
 const SECURITY_HEADERS: Record<string, string> = {
