@@ -9,7 +9,7 @@
 
 **The open-source MCP gateway that makes AI tool calls production-ready.**
 
-Conduit sits between your AI agents and MCP servers. One YAML file gives you caching, auth, rate limiting, guardrails, and multi-server routing — no code changes.
+Conduit sits between your AI agents and MCP servers. One YAML file gives you caching, auth, rate limiting, guardrails, and multi-server routing. No code changes needed.
 
 ```
   AI Agents ──> [ Conduit ] ──> MCP Server A (HTTP)
@@ -27,7 +27,7 @@ npx conduit init   # interactive setup wizard
 npx conduit        # start the gateway
 ```
 
-Or manually — create `conduit.config.yml`:
+Or create `conduit.config.yml`:
 
 ```yaml
 servers:
@@ -53,8 +53,8 @@ Measured on a single machine, single process. These are real numbers, not theore
 |---|---|---|
 | **Gateway overhead** | **0.02ms** added per request | You won't notice Conduit is there |
 | **Cache hit throughput** | **46K RPS** (sequential) / **64K RPS** (concurrent) | Cached responses are instant |
-| **All features enabled** | **111K RPS** at P99 = 3.24ms | Auth + plugins + rate limit + cache — still fast |
-| **Stdio transport** | **354K RPS** (concurrent) | Faster than HTTP — no network overhead |
+| **All features enabled** | **111K RPS** at P99 = 3.24ms | Auth + plugins + rate limit + cache, still fast |
+| **Stdio transport** | **354K RPS** (concurrent) | Faster than HTTP (no network overhead) |
 | **Plugin hooks** | **2M ops/sec** | Plugins add zero measurable latency |
 
 <details>
@@ -63,11 +63,11 @@ Measured on a single machine, single process. These are real numbers, not theore
 | | **Conduit** | Bifrost (Go) | TrueFoundry | Envoy AI GW |
 |---|---|---|---|---|
 | Overhead | 0.02ms | 0.011ms | 3-4ms | 1-2ms |
-| Cache hit RPS | 46K-64K | — | 350/vCPU | — |
+| Cache hit RPS | 46K-64K | not published | 350/vCPU | not published |
 | Language | TypeScript | Go | TypeScript | C++/Go |
 | License | MIT | Apache 2.0 | Proprietary | Apache 2.0 |
 
-Bifrost has lower raw overhead (Go vs JS). We compensate with aggressive caching — in practice, most requests are cache hits.
+Bifrost has lower raw overhead (Go vs JS). We compensate with aggressive caching. In practice, most requests are cache hits.
 
 </details>
 
@@ -85,11 +85,11 @@ npm run benchmark:quick   # 3-second smoke test
 | Feature | Description |
 |---|---|
 | **Multi-server routing** | Route tools across servers with namespace prefixes (`github.list_repos`) |
-| **HTTP + stdio transport** | Proxy HTTP servers or spawn local binaries — same features for both |
+| **HTTP + stdio transport** | Proxy HTTP servers or spawn local binaries. Same features for both |
 | **Load balancing** | Round-robin or least-connections across replicas |
 | **Circuit breaker** | Per-replica failure isolation (closed/open/half-open) |
 | **Health checks** | Periodic probes with configurable thresholds |
-| **Hot reload** | `SIGHUP` or API call — add servers, update rules, zero downtime |
+| **Hot reload** | `SIGHUP` or API call. Add servers, update rules, zero downtime |
 
 ### Caching
 
@@ -120,7 +120,7 @@ npm run benchmark:quick   # 3-second smoke test
 | **Structured logs** | SQLite with retention, field redaction, trace correlation |
 | **Prometheus metrics** | 18 counters/gauges/histograms on dedicated port |
 | **OpenTelemetry** | W3C Trace Context + OTLP export |
-| **Admin dashboard** | React SPA — logs, servers, cache stats, circuit breakers |
+| **Admin dashboard** | React SPA: logs, servers, cache stats, circuit breakers |
 | **Admin API** | 40+ endpoints for programmatic access |
 
 ### Extensibility
@@ -227,11 +227,11 @@ helm install conduit deploy/helm/conduit --set config.adminKey=$(openssl rand -h
 We believe in being upfront:
 
 - **Not a managed service.** You host it. No SaaS offering.
-- **Not a cluster.** Single process — scale horizontally with a load balancer.
+- **Not a cluster.** Single process. Scale horizontally with a load balancer.
 - **No pre-built integrations.** This is a proxy, not an integration catalog.
 - **No container isolation for stdio.** Child processes run in the same OS context.
 - **No SOC 2 certification.** Regulated environments need your own audit.
-- **Higher raw overhead than Go.** 0.02ms vs 0.011ms — language gap. Caching makes this irrelevant in practice.
+- **Higher raw overhead than Go.** 0.02ms vs 0.011ms (language gap). Caching makes this irrelevant in practice.
 
 ---
 
