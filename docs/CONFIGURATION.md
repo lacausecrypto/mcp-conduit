@@ -1,4 +1,4 @@
-# Conduit — Complete Configuration Reference
+# Conduit: Complete Configuration Reference
 
 This page documents **every field** in the `conduit.config.yml` configuration file, including its type, default value, description, and corresponding environment variable override.
 
@@ -8,20 +8,20 @@ Environment variables **always take precedence** over the configuration file.
 
 ## Table of Contents
 
-1. [`gateway`](#1-gateway) — HTTP gateway
-2. [`router`](#2-router) — Multi-server routing
-3. [`servers[]`](#3-servers) — Upstream MCP servers
-4. [`cache`](#4-cache) — L1 + L2 cache
-5. [`auth`](#5-authentication) — Authentication
-6. [`acl`](#6-acl) — Access control
-7. [`rate_limits`](#7-rate-limits) — Rate limiting
-8. [`tenant_isolation`](#8-tenant-isolation) — Tenant isolation
-9. [`guardrails`](#9-guardrails) — AI guardrails
-10. [`observability`](#10-observability) — Logs, redaction, OpenTelemetry
-11. [`metrics`](#11-metrics) — Prometheus
-12. [`admin`](#12-admin) — Administration API
-13. [`plugins`](#13-plugins) — Plugin system
-14. [`discovery`](#14-discovery) — Service discovery
+1. [`gateway`](#1-gateway): HTTP gateway
+2. [`router`](#2-router): Multi-server routing
+3. [`servers[]`](#3-servers): Upstream MCP servers
+4. [`cache`](#4-cache): L1 + L2 cache
+5. [`auth`](#5-authentication): Authentication
+6. [`acl`](#6-acl): Access control
+7. [`rate_limits`](#7-rate-limits): Rate limiting
+8. [`tenant_isolation`](#8-tenant-isolation): Tenant isolation
+9. [`guardrails`](#9-guardrails): AI guardrails
+10. [`observability`](#10-observability): Logs, redaction, OpenTelemetry
+11. [`metrics`](#11-metrics): Prometheus
+12. [`admin`](#12-admin): Administration API
+13. [`plugins`](#13-plugins): Plugin system
+14. [`discovery`](#14-discovery): Service discovery
 
 ---
 
@@ -46,15 +46,15 @@ gateway:
 
 ### `gateway.tls`
 
-Native TLS configuration. Optional — if absent, the gateway runs in HTTP mode.
+Native TLS configuration. Optional: if absent, the gateway runs in HTTP mode.
 
 | Field | Type | Default | Env | Description |
 |-------|------|---------|-----|-------------|
 | `gateway.tls.enabled` | `boolean` | `false` | `CONDUIT_TLS_ENABLED` | Enable native HTTPS |
-| `gateway.tls.cert_path` | `string` | — | `CONDUIT_TLS_CERT` | Absolute path to the PEM certificate file |
-| `gateway.tls.key_path` | `string` | — | `CONDUIT_TLS_KEY` | Absolute path to the PEM private key file |
-| `gateway.tls.ca_path` | `string` | — | — | CA bundle for mTLS (mutual TLS). Optional |
-| `gateway.tls.min_version` | `"TLSv1.2"` \| `"TLSv1.3"` | `"TLSv1.2"` | — | Minimum accepted TLS version |
+| `gateway.tls.cert_path` | `string` |: | `CONDUIT_TLS_CERT` | Absolute path to the PEM certificate file |
+| `gateway.tls.key_path` | `string` |: | `CONDUIT_TLS_KEY` | Absolute path to the PEM private key file |
+| `gateway.tls.ca_path` | `string` |: |: | CA bundle for mTLS (mutual TLS). Optional |
+| `gateway.tls.min_version` | `"TLSv1.2"` \| `"TLSv1.3"` | `"TLSv1.2"` |: | Minimum accepted TLS version |
 
 **Example:**
 
@@ -79,7 +79,7 @@ Multi-server routing, health checks, load balancing, and circuit breaker configu
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `router.namespace_strategy` | `"prefix"` \| `"none"` | **required** | Tool naming strategy. `"prefix"`: prefixes with server id (`salesforce.get_contact`). `"none"`: raw name (`get_contact`) — startup error if two servers share a tool name |
+| `router.namespace_strategy` | `"prefix"` \| `"none"` | **required** | Tool naming strategy. `"prefix"`: prefixes with server id (`salesforce.get_contact`). `"none"`: raw name (`get_contact`): startup error if two servers share a tool name |
 | `router.load_balancing` | `"round-robin"` \| `"least-connections"` | `"round-robin"` | Request distribution strategy between replicas |
 
 ### `router.health_check`
@@ -96,7 +96,7 @@ Periodic health checks for upstream backends.
 
 ### `router.circuit_breaker`
 
-Circuit breaker per replica. Optional — disabled by default.
+Circuit breaker per replica. Optional: disabled by default.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -139,7 +139,7 @@ List of upstream MCP servers. At least one server is required.
 | `servers[].id` | `string` | **required** | Unique server identifier. Used in URLs (`/mcp/:id`) and logs. Letters, digits, hyphens only |
 | `servers[].url` | `string` | **required** | Full URL of the MCP endpoint (HTTP) or identifier string (stdio: `"stdio://server-name"`) |
 | `servers[].transport` | `"http"` \| `"stdio"` | `"http"` | Transport type. `"http"`: communicates over HTTP. `"stdio"`: launches a child process communicating via stdin/stdout |
-| `servers[].command` | `string` | — | Command to execute (required if `transport: stdio`) |
+| `servers[].command` | `string` |: | Command to execute (required if `transport: stdio`) |
 | `servers[].args` | `string[]` | `[]` | Command arguments (for `transport: stdio`) |
 | `servers[].env` | `Record<string, string>` | `{}` | Additional environment variables passed to the child process (for `transport: stdio`) |
 | `servers[].replicas[]` | `string[]` | `[]` | Additional URLs for load balancing (HTTP only). Requests are distributed across `url` + `replicas` |
@@ -153,7 +153,7 @@ Cache configuration for a given server.
 |-------|------|---------|-------------|
 | `servers[].cache.default_ttl` | `number` | **required** | Default TTL in seconds for cached tools on this server. `0` disables caching for this server |
 | `servers[].cache.overrides` | `Record<string, ToolOverrideConfig>` | `{}` | Per-tool overrides. Key is the tool name (without namespace prefix) |
-| `servers[].cache.overrides.<tool>.ttl` | `number` | — | Specific TTL for this tool. `0` = do not cache |
+| `servers[].cache.overrides.<tool>.ttl` | `number` |: | Specific TTL for this tool. `0` = do not cache |
 | `servers[].cache.overrides.<tool>.ignore_args` | `string[]` | `[]` | Arguments excluded from the cache key. Useful for timestamps, non-deterministic request IDs |
 | `servers[].cache.overrides.<tool>.invalidates` | `string[]` | `[]` | List of tools whose cache is invalidated when this tool is called (e.g., a write tool invalidates reads) |
 
@@ -204,7 +204,7 @@ servers:
 
 ## 4. Cache
 
-### `cache` (L1 — In-Memory)
+### `cache` (L1: In-Memory)
 
 Global L1 in-memory LRU cache configuration.
 
@@ -224,17 +224,17 @@ cache:
     max_entry_size_kb: 128
 ```
 
-### `cache.l2` (L2 — Distributed Redis)
+### `cache.l2` (L2: Distributed Redis)
 
 Optional distributed Redis cache layer. Provides shared caching across multiple gateway instances.
 
 | Field | Type | Default | Env | Description |
 |-------|------|---------|-----|-------------|
-| `cache.l2.enabled` | `boolean` | `false` | — | Enable the L2 Redis cache |
-| `cache.l2.redis_url` | `string` | — | `CONDUIT_REDIS_URL` | Redis connection URL. Format: `redis://[user:password@]host:port[/db]` |
-| `cache.l2.default_ttl_multiplier` | `number` | `3` | — | L2 TTL = L1 TTL x this multiplier. Keeps L2 entries alive longer than L1 |
-| `cache.l2.key_prefix` | `string` | `"conduit:cache:"` | — | Prefix for all Redis cache keys. Change if multiple gateways share the same Redis instance |
-| `cache.l2.max_entry_size_kb` | `number` | `512` | — | Maximum entry size in KB for L2 storage |
+| `cache.l2.enabled` | `boolean` | `false` |: | Enable the L2 Redis cache |
+| `cache.l2.redis_url` | `string` |: | `CONDUIT_REDIS_URL` | Redis connection URL. Format: `redis://[user:password@]host:port[/db]` |
+| `cache.l2.default_ttl_multiplier` | `number` | `3` |: | L2 TTL = L1 TTL x this multiplier. Keeps L2 entries alive longer than L1 |
+| `cache.l2.key_prefix` | `string` | `"conduit:cache:"` |: | Prefix for all Redis cache keys. Change if multiple gateways share the same Redis instance |
+| `cache.l2.max_entry_size_kb` | `number` | `512` |: | Maximum entry size in KB for L2 storage |
 
 **Example:**
 
@@ -256,7 +256,7 @@ cache:
 
 ## 5. Authentication
 
-Client authentication configuration. Optional — if absent, `method: none` is used.
+Client authentication configuration. Optional: if absent, `method: none` is used.
 
 **WARNING:** `method: none` should only be used in development or on a fully secured private network.
 
@@ -269,8 +269,8 @@ Client authentication configuration. Optional — if absent, `method: none` is u
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `auth.jwks_url` | `string` | **required** | JWKS endpoint URL of your identity provider (e.g., Auth0, Keycloak, Okta) |
-| `auth.issuer` | `string` | — | Expected value of the `iss` claim in the JWT. Recommended |
-| `auth.audience` | `string` | — | Expected value of the `aud` claim in the JWT. Recommended |
+| `auth.issuer` | `string` |: | Expected value of the `iss` claim in the JWT. Recommended |
+| `auth.audience` | `string` |: | Expected value of the `aud` claim in the JWT. Recommended |
 | `auth.tenant_claim` | `string` | `"org_id"` | Name of the JWT claim containing the tenant identifier (used for isolation) |
 | `auth.client_claim` | `string` | `"sub"` | Name of the JWT claim containing the client identifier (used for ACL and logs) |
 
@@ -325,7 +325,7 @@ Authorization: Bearer sk-agent-support-a3f8b2c1d4e5f6a7b8c9
 
 ## 6. ACL
 
-Granular access control by client, server, and tool. Optional — if absent, everything is allowed.
+Granular access control by client, server, and tool. Optional: if absent, everything is allowed.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -388,13 +388,13 @@ acl:
 
 ## 7. Rate Limits
 
-Request rate limiting. Optional — if absent, no limits are applied.
+Request rate limiting. Optional: if absent, no limits are applied.
 
 | Field | Type | Default | Env | Description |
 |-------|------|---------|-----|-------------|
-| `rate_limits.enabled` | `boolean` | `false` | — | Enable rate limiting |
+| `rate_limits.enabled` | `boolean` | `false` |: | Enable rate limiting |
 | `rate_limits.backend` | `"memory"` \| `"redis"` | `"memory"` | Counter storage backend. `"memory"`: local to each instance. `"redis"`: shared across instances |
-| `rate_limits.redis_url` | `string` | — | `CONDUIT_REDIS_URL` | Redis URL (required if `backend: redis`). E.g., `redis://localhost:6379` |
+| `rate_limits.redis_url` | `string` |: | `CONDUIT_REDIS_URL` | Redis URL (required if `backend: redis`). E.g., `redis://localhost:6379` |
 
 ### Global Limits (`rate_limits.global`)
 
@@ -494,7 +494,7 @@ tenant_isolation:
 
 ## 9. Guardrails
 
-AI guardrails inspect tool calls (tool name + arguments) and can block, alert, require approval, or transform arguments. Rules are evaluated in order — first match wins.
+AI guardrails inspect tool calls (tool name + arguments) and can block, alert, require approval, or transform arguments. Rules are evaluated in order: first match wins.
 
 ### `guardrails`
 
@@ -508,9 +508,9 @@ AI guardrails inspect tool calls (tool name + arguments) and can block, alert, r
 | Field | Type | Description |
 |-------|------|-------------|
 | `rules[].name` | `string` | Unique rule name (for logs and debugging) |
-| `rules[].tools` | `string[]` | Tool name patterns with wildcards: `"delete_*"`, `"*"`. Optional — if omitted, matches all tools |
-| `rules[].clients` | `string[]` | Client scoping patterns. Optional — if omitted, matches all clients |
-| `rules[].servers` | `string[]` | Server scoping patterns. Optional — if omitted, matches all servers |
+| `rules[].tools` | `string[]` | Tool name patterns with wildcards: `"delete_*"`, `"*"`. Optional: if omitted, matches all tools |
+| `rules[].clients` | `string[]` | Client scoping patterns. Optional: if omitted, matches all clients |
+| `rules[].servers` | `string[]` | Server scoping patterns. Optional: if omitted, matches all servers |
 | `rules[].bypass` | `boolean` | If `true`, skip all guardrails for matching clients. The `action` field is irrelevant when bypass is enabled |
 | `rules[].conditions` | `GuardrailCondition[]` | Conditions on tool arguments. All conditions must match (AND logic) |
 | `rules[].action` | `"block"` \| `"alert"` \| `"require_approval"` \| `"transform"` | Action to take when the rule matches |
@@ -598,9 +598,9 @@ Structured logging, field redaction, and distributed tracing.
 | Field | Type | Default | Env | Description |
 |-------|------|---------|-----|-------------|
 | `observability.log_args` | `boolean` | `true` | `CONDUIT_LOG_ARGS` | Log tool call arguments. Disable if arguments are large or contain sensitive data |
-| `observability.log_responses` | `boolean` | `false` | — | Log tool responses. Enable only for debugging (very verbose) |
-| `observability.redact_fields` | `string[]` | see below | — | Field names to mask in logs (case-insensitive comparison). Values are replaced with `"[REDACTED]"` |
-| `observability.retention_days` | `number` | `30` | — | SQLite log retention in days. Older logs are automatically deleted |
+| `observability.log_responses` | `boolean` | `false` |: | Log tool responses. Enable only for debugging (very verbose) |
+| `observability.redact_fields` | `string[]` | see below |: | Field names to mask in logs (case-insensitive comparison). Values are replaced with `"[REDACTED]"` |
+| `observability.retention_days` | `number` | `30` |: | SQLite log retention in days. Older logs are automatically deleted |
 | `observability.db_path` | `string` | `"./conduit-logs.db"` | `CONDUIT_DB_PATH` | Path to the SQLite log database. Use a persistent volume in production |
 
 **Default redacted fields:** `password`, `api_key`, `token`, `secret`, `authorization`, `ssn`
@@ -655,7 +655,7 @@ Prometheus metrics export.
 
 | Field | Type | Default | Env | Description |
 |-------|------|---------|-----|-------------|
-| `metrics.enabled` | `boolean` | `true` | — | Enable Prometheus export |
+| `metrics.enabled` | `boolean` | `true` |: | Enable Prometheus export |
 | `metrics.port` | `number` | `9090` | `CONDUIT_METRICS_PORT` | Dedicated metrics server port. Metrics are also available at `/conduit/metrics` on the main port |
 
 **Example:**
@@ -674,7 +674,7 @@ Administration API configuration.
 
 | Field | Type | Default | Env | Description |
 |-------|------|---------|-----|-------------|
-| `admin.key` | `string` | — | `CONDUIT_ADMIN_KEY` | Bearer key protecting all `/conduit/*` endpoints (except `/conduit/health` and `/conduit/dashboard`). If absent, the admin API is open. **Always set in production** |
+| `admin.key` | `string` |: | `CONDUIT_ADMIN_KEY` | Bearer key protecting all `/conduit/*` endpoints (except `/conduit/health` and `/conduit/dashboard`). If absent, the admin API is open. **Always set in production** |
 
 The key comparison uses `timingSafeEqual` to prevent timing attacks.
 
@@ -782,14 +782,14 @@ All environment variables take precedence over the YAML configuration file.
 
 | Variable | Config Field | Type | Default | Description |
 |----------|-------------|------|---------|-------------|
-| `CONDUIT_CONFIG` | — | string | `conduit.config.yml` | Path to the YAML configuration file |
+| `CONDUIT_CONFIG` |: | string | `conduit.config.yml` | Path to the YAML configuration file |
 | `CONDUIT_PORT` | `gateway.port` | number | `8080` | Gateway listening port |
 | `CONDUIT_HOST` | `gateway.host` | string | `0.0.0.0` | Listening address |
 | `CONDUIT_ADMIN_KEY` | `admin.key` | string | _(empty)_ | Bearer key for the admin API. If empty, the API is open |
 | `CONDUIT_DB_PATH` | `observability.db_path` | string | `./conduit-logs.db` | SQLite log database path |
 | `CONDUIT_METRICS_PORT` | `metrics.port` | number | `9090` | Prometheus server port |
 | `CONDUIT_TLS_ENABLED` | `gateway.tls.enabled` | boolean | `false` | Enable native HTTPS |
-| `CONDUIT_TLS_CERT` | `gateway.tls.cert_path` | string | — | Path to the PEM certificate |
-| `CONDUIT_TLS_KEY` | `gateway.tls.key_path` | string | — | Path to the PEM private key |
-| `CONDUIT_REDIS_URL` | `rate_limits.redis_url` / `cache.l2.redis_url` | string | — | Redis URL for distributed rate limiting and L2 cache |
+| `CONDUIT_TLS_CERT` | `gateway.tls.cert_path` | string |: | Path to the PEM certificate |
+| `CONDUIT_TLS_KEY` | `gateway.tls.key_path` | string |: | Path to the PEM private key |
+| `CONDUIT_REDIS_URL` | `rate_limits.redis_url` / `cache.l2.redis_url` | string |: | Redis URL for distributed rate limiting and L2 cache |
 | `CONDUIT_LOG_ARGS` | `observability.log_args` | boolean | `true` | Log tool arguments (`false` to disable) |

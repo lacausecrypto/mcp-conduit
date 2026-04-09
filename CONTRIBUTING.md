@@ -29,11 +29,11 @@ Thank you for your interest in contributing to MCP Conduit. This document explai
 
 Use a descriptive prefix for your branch:
 
-- `feat/short-description` — new feature
-- `fix/short-description` — bug fix
-- `test/short-description` — test additions or changes
-- `docs/short-description` — documentation only
-- `refactor/short-description` — code restructuring without behavior change
+- `feat/short-description`: new feature
+- `fix/short-description`: bug fix
+- `test/short-description`: test additions or changes
+- `docs/short-description`: documentation only
+- `refactor/short-description`: code restructuring without behavior change
 
 ### Pull Request Process
 
@@ -94,13 +94,13 @@ test(guardrails): add block action integration tests
 docs: update CHANGELOG for v0.2.0
 ```
 
-## Adding a New Feature — Checklist
+## Adding a New Feature: Checklist
 
-1. **Types** — Define or extend TypeScript interfaces and types first.
-2. **Implementation** — Write the feature code.
-3. **Tests** — Add unit tests at minimum; integration or e2e tests when the feature touches transport or routing.
-4. **Documentation** — Update relevant docs (README, CHANGELOG, inline JSDoc).
-5. **Benchmark** — If the feature affects the hot path, add or update a benchmark scenario.
+1. **Types**: Define or extend TypeScript interfaces and types first.
+2. **Implementation**: Write the feature code.
+3. **Tests**: Add unit tests at minimum; integration or e2e tests when the feature touches transport or routing.
+4. **Documentation**: Update relevant docs (README, CHANGELOG, inline JSDoc).
+5. **Benchmark**: If the feature affects the hot path, add or update a benchmark scenario.
 
 ## Reporting Issues
 

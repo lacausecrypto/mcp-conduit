@@ -1,4 +1,4 @@
-# Security Guide — Conduit
+# Security Guide: Conduit
 
 ## Before You Start
 
@@ -90,7 +90,7 @@ openssl rand -hex 32
 **Security notes:**
 - Never commit API keys to version control
 - Inject keys via environment variables or a secret manager (Vault, AWS Secrets Manager, Kubernetes Secrets)
-- Rotate keys periodically — add the new key, update clients, then remove the old key
+- Rotate keys periodically: add the new key, update clients, then remove the old key
 
 ---
 
@@ -369,7 +369,7 @@ rate_limits:
 
 Place a reverse proxy (Caddy, nginx, Traefik) in front of Conduit. The proxy handles TLS termination; Conduit listens on HTTP internally.
 
-**Caddy (simplest — automatic Let's Encrypt):**
+**Caddy (simplest: automatic Let's Encrypt):**
 
 ```
 # Caddyfile
@@ -448,7 +448,7 @@ services:
   gateway:
     image: conduit:latest
     ports:
-      - "8080:8080"       # MCP port — exposed to clients
+      - "8080:8080"       # MCP port: exposed to clients
       # Do NOT expose port 9090 externally (Prometheus metrics)
     environment:
       - CONDUIT_ADMIN_KEY=${CONDUIT_ADMIN_KEY}
@@ -555,7 +555,7 @@ spec:
             name: conduit-config
 ```
 
-**Network Policy — restrict Prometheus port to monitoring namespace:**
+**Network Policy: restrict Prometheus port to monitoring namespace:**
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -590,7 +590,7 @@ spec:
 | `conduit_requests_total{status="error"}` | Error rate > 5% | High error rate indicates backend issues |
 | `conduit_request_duration_seconds` | p99 > 5s | Slow responses indicate overloaded backends |
 | `conduit_cache_hit_rate` | Drop below 30% | Cache may be misconfigured or undersized |
-| `conduit_circuit_breaker_state` | `open` | Backend is failing — investigate immediately |
+| `conduit_circuit_breaker_state` | `open` | Backend is failing: investigate immediately |
 | `conduit_rate_limit_rejections_total` | Spike | Client may be abusive or limits too strict |
 | `conduit_guardrail_blocks_total` | Spike | Potential abuse or misconfigured guardrails |
 
@@ -725,7 +725,7 @@ Run this script to verify your deployment is properly secured:
 ```bash
 #!/bin/bash
 # =============================================================
-# Conduit — Security Audit Script
+# Conduit: Security Audit Script
 # Run this against your production deployment to verify security.
 # Usage: ./security-audit.sh http://localhost:8080
 # =============================================================
@@ -763,7 +763,7 @@ STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$GW/conduit/stats" 2>/dev/null)
 if [ "$STATUS" = "401" ]; then
   pass "Admin API requires authentication"
 else
-  fail "Admin API is OPEN without authentication (HTTP $STATUS) — set CONDUIT_ADMIN_KEY"
+  fail "Admin API is OPEN without authentication (HTTP $STATUS): set CONDUIT_ADMIN_KEY"
 fi
 
 STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$GW/conduit/version" 2>/dev/null)
@@ -792,7 +792,7 @@ STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$GW/mcp" \
 if [ "$STATUS" = "401" ] || [ "$STATUS" = "403" ]; then
   pass "MCP endpoint requires client authentication (HTTP $STATUS)"
 elif [ "$STATUS" = "200" ]; then
-  warn "MCP endpoint is open (HTTP $STATUS) — ensure this is on a private network or enable auth"
+  warn "MCP endpoint is open (HTTP $STATUS): ensure this is on a private network or enable auth"
 else
   pass "MCP endpoint returned HTTP $STATUS (likely auth or server not found)"
 fi
@@ -808,7 +808,7 @@ if echo "$GW" | grep -q "^https://"; then
     pass "TLS version: $TLS_VERSION"
   fi
 else
-  warn "Using HTTP — ensure a reverse proxy provides HTTPS in production"
+  warn "Using HTTP: ensure a reverse proxy provides HTTPS in production"
 fi
 
 # 6. Security headers
@@ -841,7 +841,7 @@ METRICS_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$GW:9090/metrics" 2>/de
 if [ "$METRICS_STATUS" = "000" ]; then
   pass "Metrics port not reachable from this host"
 elif [ "$METRICS_STATUS" = "200" ]; then
-  warn "Metrics port (9090) is reachable — restrict to monitoring network only"
+  warn "Metrics port (9090) is reachable: restrict to monitoring network only"
 else
   pass "Metrics port returned HTTP $METRICS_STATUS"
 fi
@@ -851,7 +851,7 @@ echo ""
 echo "--- Dashboard ---"
 DASHBOARD_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$GW/conduit/dashboard" 2>/dev/null)
 if [ "$DASHBOARD_STATUS" = "200" ]; then
-  warn "Dashboard is publicly accessible (by design) — admin key is required for API calls from the dashboard"
+  warn "Dashboard is publicly accessible (by design): admin key is required for API calls from the dashboard"
 fi
 
 # Summary
@@ -865,13 +865,13 @@ echo "  FAIL: $FAIL"
 echo ""
 
 if [ "$FAIL" -gt 0 ]; then
-  echo "RESULT: FAILED — Fix the issues above before deploying to production."
+  echo "RESULT: FAILED: Fix the issues above before deploying to production."
   exit 1
 elif [ "$WARN" -gt 0 ]; then
-  echo "RESULT: PASSED WITH WARNINGS — Review the warnings above."
+  echo "RESULT: PASSED WITH WARNINGS: Review the warnings above."
   exit 0
 else
-  echo "RESULT: PASSED — All checks passed."
+  echo "RESULT: PASSED: All checks passed."
   exit 0
 fi
 ```
@@ -892,7 +892,7 @@ Expected output for a properly secured deployment:
 [PASS] POST endpoints have CSRF or auth protection (HTTP 401)
 [PASS] MCP endpoint requires client authentication (HTTP 401)
 ...
-RESULT: PASSED — All checks passed.
+RESULT: PASSED: All checks passed.
 ```
 
 ---

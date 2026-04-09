@@ -46,13 +46,13 @@ Follow these recommendations when deploying MCP Conduit:
 
 The following endpoints must not be accessible to untrusted networks:
 
-- `/conduit/admin/*` — gateway administration
-- `/conduit/servers` — dynamic server management
-- `/conduit/metrics` — Prometheus metrics
-- `/conduit/health` — health check details (leaks version information)
-- `/conduit/cache/*` — cache inspection and invalidation
-- `/conduit/logs/*` — structured log queries
-- `/conduit/guardrails/*` — guardrail configuration and status
+- `/conduit/admin/*`: gateway administration
+- `/conduit/servers`: dynamic server management
+- `/conduit/metrics`: Prometheus metrics
+- `/conduit/health`: health check details (leaks version information)
+- `/conduit/cache/*`: cache inspection and invalidation
+- `/conduit/logs/*`: structured log queries
+- `/conduit/guardrails/*`: guardrail configuration and status
 
 ## Known Limitations
 

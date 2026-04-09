@@ -1,4 +1,4 @@
-# Conduit — API Reference
+# Conduit: API Reference
 
 This page documents all endpoints exposed by Conduit.
 
@@ -1233,9 +1233,9 @@ State of all circuit breakers.
 
 | State | Description |
 |-------|-------------|
-| `closed` | Normal — requests pass through |
-| `open` | Circuit open — all requests are rejected immediately |
-| `half-open` | Test — a probe request is sent to check recovery |
+| `closed` | Normal: requests pass through |
+| `open` | Circuit open: all requests are rejected immediately |
+| `half-open` | Test: a probe request is sent to check recovery |
 
 **curl example:**
 
@@ -1419,7 +1419,7 @@ curl -H "Authorization: Bearer $CONDUIT_ADMIN_KEY" \
 
 #### GET /conduit/dashboard
 
-Serves the built-in React dashboard (SPA). Accessible without authentication — the HTML page itself contains no secrets. All API calls made from within the dashboard include the admin key from `localStorage`.
+Serves the built-in React dashboard (SPA). Accessible without authentication: the HTML page itself contains no secrets. All API calls made from within the dashboard include the admin key from `localStorage`.
 
 **Auth required:** No
 **CSRF header required:** No
