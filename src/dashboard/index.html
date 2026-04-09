@@ -1,0 +1,1160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Conduit Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = { darkMode: 'class', theme: { extend: {} } };
+  </script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; overflow: hidden; }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0a0a0a; color: #fff;
+      -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+    }
+    ::-webkit-scrollbar { width: 4px; height: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #3c3c3e; border-radius: 4px; }
+
+    @keyframes spin     { to { transform: rotate(360deg); } }
+    @keyframes breathe  { 0%,100%{box-shadow:0 0 0 0 rgba(48,209,88,.45)}50%{box-shadow:0 0 0 5px rgba(48,209,88,0)} }
+    @keyframes shimmer  { 0%{background-position:-200% 0}100%{background-position:200% 0} }
+    @keyframes slide-in { from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)} }
+    @keyframes fade-in  { from{opacity:0}to{opacity:1} }
+    @keyframes rp       { 0%,100%{opacity:1}50%{opacity:.3} }
+
+    .spin      { animation: spin 1s linear infinite; }
+    .breathe   { animation: breathe 2s ease-in-out infinite; }
+    .slide-in  { animation: slide-in .2s ease-out; }
+    .fade-in   { animation: fade-in .15s ease-out; }
+    .rp-blink  { animation: rp 1.5s ease-in-out infinite; }
+
+    /* Sidebar */
+    .nx-sidebar {
+      width: 64px;
+      transition: width .25s cubic-bezier(.4,0,.2,1);
+      overflow: hidden; flex-shrink: 0;
+      background: rgba(10,10,10,.97);
+      border-right: 1px solid #1c1c1e;
+      display: flex; flex-direction: column;
+      backdrop-filter: blur(20px);
+    }
+    .nx-sidebar:hover { width: 240px; }
+    .nx-sidebar .nl { opacity:0; transform:translateX(-4px); transition:opacity .15s,transform .15s; white-space:nowrap; }
+    .nx-sidebar:hover .nl { opacity:1; transform:translateX(0); }
+    .nx-sidebar .bn { opacity:0; transition:opacity .15s .05s; white-space:nowrap; }
+    .nx-sidebar:hover .bn { opacity:1; }
+
+    /* Nav items */
+    .nav-item {
+      display:flex; align-items:center; gap:12px;
+      padding:10px 14px; border-radius:10px;
+      border:none; background:transparent; color:#98989d;
+      cursor:pointer; width:100%; text-align:left;
+      transition:background .15s, color .15s; font-family:inherit;
+    }
+    .nav-item:hover  { background:rgba(255,255,255,.05); color:#fff; }
+    .nav-item.active { background:rgba(10,132,255,.15); color:#0A84FF; }
+
+    /* Card */
+    .nx-card { background:#1c1c1e; border:1px solid #2c2c2e; border-radius:16px; }
+
+    /* Stat gradient cards */
+    .sg-blue   { background:linear-gradient(135deg,#1c1c1e 55%,rgba(10,132,255,.1) 100%); }
+    .sg-green  { background:linear-gradient(135deg,#1c1c1e 55%,rgba(48,209,88,.1) 100%); }
+    .sg-yellow { background:linear-gradient(135deg,#1c1c1e 55%,rgba(255,214,10,.1) 100%); }
+    .sg-red    { background:linear-gradient(135deg,#1c1c1e 55%,rgba(255,69,58,.1) 100%); }
+
+    /* Buttons */
+    .nx-btn {
+      display:inline-flex; align-items:center; justify-content:center; gap:6px;
+      border:1px solid #3c3c3e; border-radius:10px; background:transparent; color:#fff;
+      padding:7px 14px; font-size:13px; font-weight:500; cursor:pointer;
+      transition:background .15s,transform .1s; font-family:inherit;
+    }
+    .nx-btn:hover  { background:rgba(255,255,255,.06); transform:scale(1.01); }
+    .nx-btn:active { transform:scale(.99); }
+    .nx-btn-p {
+      display:inline-flex; align-items:center; justify-content:center; gap:6px;
+      background:#0A84FF; border:none; border-radius:10px; color:#fff;
+      padding:8px 16px; font-size:13px; font-weight:600; cursor:pointer;
+      transition:background .15s,transform .1s; font-family:inherit;
+    }
+    .nx-btn-p:hover    { background:#0077ED; transform:scale(1.01); }
+    .nx-btn-p:active   { transform:scale(.99); }
+    .nx-btn-p:disabled { opacity:.4; cursor:not-allowed; transform:none; }
+    .nx-btn-d {
+      display:inline-flex; align-items:center; justify-content:center; gap:6px;
+      background:rgba(255,69,58,.1); border:1px solid rgba(255,69,58,.3);
+      border-radius:10px; color:#FF453A; padding:6px 12px; font-size:12px;
+      font-weight:500; cursor:pointer; transition:background .15s; font-family:inherit;
+    }
+    .nx-btn-d:hover    { background:rgba(255,69,58,.2); }
+    .nx-btn-d:disabled { opacity:.4; cursor:not-allowed; }
+
+    /* Input */
+    .nx-input {
+      background:#1c1c1e; border:1px solid #3c3c3e; border-radius:10px;
+      color:#fff; font-family:inherit; font-size:13px;
+      padding:8px 12px; outline:none; width:100%;
+      transition:border-color .15s;
+    }
+    .nx-input:focus       { border-color:#0A84FF; }
+    .nx-input::placeholder { color:#48484a; }
+
+    /* Badges */
+    .nbg { display:inline-flex; align-items:center; padding:2px 8px; border-radius:20px; font-size:11px; font-weight:500; }
+    .bg-s { background:rgba(48,209,88,.12);  color:#30D158; }
+    .bg-e { background:rgba(255,69,58,.12);  color:#FF453A; }
+    .bg-w { background:rgba(255,214,10,.12); color:#FFD60A; }
+    .bg-h { background:rgba(10,132,255,.12); color:#0A84FF; }
+    .bg-d { background:rgba(255,255,255,.08);color:#98989d; }
+
+    /* Table */
+    .nx-tbl { width:100%; border-collapse:collapse; }
+    .nx-tbl th {
+      text-align:left; padding:11px 16px; font-size:11px; font-weight:500;
+      text-transform:uppercase; letter-spacing:.06em; color:#48484a;
+      border-bottom:1px solid #2c2c2e;
+    }
+    .nx-tbl td { padding:10px 16px; border-bottom:1px solid rgba(44,44,46,.5); font-size:13px; }
+    .nx-tbl tr:last-child td { border-bottom:none; }
+    .nx-tbl tbody tr { transition:background .1s; cursor:pointer; }
+    .nx-tbl tbody tr:hover { background:rgba(255,255,255,.025); }
+
+    /* Duration colors */
+    .df { color:#30D158; } .dm { color:#FFD60A; } .ds { color:#FF453A; } .dn { color:#98989d; }
+
+    /* Server card hover */
+    .sv-card { transition:transform .2s,box-shadow .2s,border-color .2s; }
+    .sv-card:hover { transform:translateY(-2px); box-shadow:0 12px 40px rgba(0,0,0,.4); border-color:#3c3c3e; }
+
+    /* Monospace */
+    .mono { font-family:'SF Mono','Fira Code','Consolas','Monaco',monospace; }
+
+    /* Top bar */
+    .nx-topbar {
+      height:48px; background:rgba(10,10,10,.97);
+      border-bottom:1px solid #1c1c1e;
+      display:flex; align-items:center; justify-content:space-between;
+      padding:0 20px; flex-shrink:0; backdrop-filter:blur(20px);
+    }
+  </style>
+</head>
+<body>
+  <div id="root" style="height:100vh;display:flex;flex-direction:column;overflow:hidden;background:#0a0a0a"></div>
+
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/recharts@2.12.0/umd/Recharts.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script type="text/babel" data-presets="react">
+    const { useState, useEffect, useCallback, useRef } = React;
+    const { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } = window.Recharts;
+
+    const STORAGE_KEY = 'conduit-admin-key';
+    const REFRESH_MS  = 5000;
+    const API_BASE    = '/conduit';
+
+    async function apiFetch(path, adminKey, opts = {}) {
+      const headers = { 'Content-Type': 'application/json' };
+      if (adminKey) headers['Authorization'] = 'Bearer ' + adminKey;
+      const res = await fetch(API_BASE + path, { ...opts, headers });
+      if (res.status === 401) { const e = new Error('UNAUTHORIZED'); e.code = 401; throw e; }
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    }
+    async function apiDelete(path, adminKey) {
+      const headers = { 'Content-Type': 'application/json', 'X-Conduit-Admin': 'true' };
+      if (adminKey) headers['Authorization'] = 'Bearer ' + adminKey;
+      const res = await fetch(API_BASE + path, { method: 'DELETE', headers });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    }
+
+    function fmt(n, dec=0) {
+      if (n==null||isNaN(n)) return '—';
+      if (n>=1e6) return (n/1e6).toFixed(1)+'M';
+      if (n>=1e3) return (n/1e3).toFixed(1)+'K';
+      return dec>0 ? n.toFixed(dec) : Math.round(n).toString();
+    }
+    function fmtPct(n)  { if(n==null||isNaN(n)) return '—'; return (n*100).toFixed(1)+'%'; }
+    function fmtMs(n)   { if(n==null||isNaN(n)) return '—'; if(n>=1000) return (n/1000).toFixed(2)+'s'; return Math.round(n)+'ms'; }
+    function fmtTime(t) { if(!t) return '—'; return new Date(t).toLocaleTimeString(); }
+    function fmtDate(t) { if(!t) return '—'; const d=new Date(t); return d.toLocaleDateString()+' '+d.toLocaleTimeString(); }
+    function fmtUp(s)   {
+      if(!s) return '—';
+      const d=Math.floor(s/86400), h=Math.floor((s%86400)/3600), m=Math.floor((s%3600)/60), ss=Math.floor(s%60);
+      if(d>0) return d+'d '+h+'h';
+      if(h>0) return h+'h '+m+'m';
+      if(m>0) return m+'m '+ss+'s';
+      return ss+'s';
+    }
+    function durCls(ms) { if(ms==null) return 'dn'; if(ms<100) return 'df'; if(ms<500) return 'dm'; return 'ds'; }
+
+    // ─── Icons ───────────────────────────────────────────────────────────────
+    const I = {
+      Grid:   ()=><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>,
+      List:   ()=><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3" cy="6" r="1.2" fill="currentColor" stroke="none"/><circle cx="3" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="3" cy="18" r="1.2" fill="currentColor" stroke="none"/></svg>,
+      Server: ()=><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><circle cx="6" cy="6" r="1" fill="currentColor" stroke="none"/><circle cx="6" cy="18" r="1" fill="currentColor" stroke="none"/></svg>,
+      DB:     ()=><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>,
+      Gauge:  ()=><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a10 10 0 0 1 7.38 16.75"/><path d="M4.62 18.75A10 10 0 0 1 12 2"/><path d="M12 12l3-4"/><circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/></svg>,
+      Shield: ()=><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>,
+      Key:    ()=><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>,
+      Ref:    ()=><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>,
+      Chk:    ()=><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>,
+      X:      ()=><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>,
+      ChevR:  ()=><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>,
+      Trash:  ()=><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>,
+      Conduit:  ()=><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>,
+      Srch:   ()=><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>,
+    };
+
+    // ─── Chart tooltip style ─────────────────────────────────────────────────
+    const TT = {
+      contentStyle:{background:'#1c1c1e',border:'1px solid #3c3c3e',borderRadius:'10px',color:'#fff',fontSize:'12px',padding:'8px 12px'},
+      labelStyle:{color:'#98989d',marginBottom:'2px'},
+      cursor:{stroke:'rgba(255,255,255,.06)',strokeWidth:1},
+    };
+
+    // ─── Primitives ──────────────────────────────────────────────────────────
+    function Card({children, cls='', style}) {
+      return <div className={'nx-card '+cls} style={style}>{children}</div>;
+    }
+
+    function StatCard({label, value, sub, color='blue'}) {
+      const sg = {blue:'sg-blue',green:'sg-green',yellow:'sg-yellow',red:'sg-red'}[color]||'sg-blue';
+      const vc = {blue:'#0A84FF',green:'#30D158',yellow:'#FFD60A',red:'#FF453A'}[color]||'#0A84FF';
+      return (
+        <div className={'nx-card '+sg} style={{padding:'20px 22px'}}>
+          <p style={{fontSize:'11px',fontWeight:500,color:'#48484a',textTransform:'uppercase',letterSpacing:'.08em',marginBottom:'8px'}}>{label}</p>
+          <p className="mono" style={{fontSize:'27px',fontWeight:700,color:vc,lineHeight:1.1,marginBottom:'4px'}}>{value}</p>
+          {sub && <p style={{fontSize:'12px',color:'#48484a',marginTop:'4px'}}>{sub}</p>}
+        </div>
+      );
+    }
+
+    function Dot({ok, lg}) {
+      const sz = lg ? 10 : 8;
+      return (
+        <span style={{position:'relative',display:'inline-flex',alignItems:'center',justifyContent:'center',width:sz,height:sz,flexShrink:0}}>
+          <span className={ok?'breathe':''} style={{width:sz,height:sz,borderRadius:'50%',background:ok?'#30D158':'#FF453A',display:'block'}}/>
+        </span>
+      );
+    }
+
+    function Bdg({children, v='d'}) {
+      const cls = {s:'bg-s',e:'bg-e',w:'bg-w',h:'bg-h',d:'bg-d'}[v]||'bg-d';
+      return <span className={'nbg '+cls}>{children}</span>;
+    }
+
+    function Spinner() {
+      return (
+        <div style={{display:'flex',alignItems:'center',justifyContent:'center',padding:'40px'}}>
+          <svg className="spin" width="22" height="22" viewBox="0 0 24 24" fill="none">
+            <circle opacity=".2" cx="12" cy="12" r="10" stroke="#0A84FF" strokeWidth="3"/>
+            <path fill="#0A84FF" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+          </svg>
+        </div>
+      );
+    }
+
+    function Empty({msg='No data'}) {
+      return (
+        <div style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:'48px 24px',color:'#3c3c3e'}}>
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" style={{marginBottom:'10px',opacity:.4}}>
+            <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+          <p style={{fontSize:'13px'}}>{msg}</p>
+        </div>
+      );
+    }
+
+    function Err({err}) {
+      if(!err) return null;
+      return <div style={{background:'rgba(255,69,58,.08)',border:'1px solid rgba(255,69,58,.2)',borderRadius:'10px',padding:'10px 14px',color:'#FF453A',fontSize:'13px',marginBottom:'14px'}}><strong>Error: </strong>{err}</div>;
+    }
+
+    // ─── Overview ────────────────────────────────────────────────────────────
+    function OverviewView({adminKey, tick}) {
+      const [health,setHealth]=useState(null);
+      const [stats,setStats]=useState(null);
+      const [circuits,setCircuits]=useState([]);
+      const [spark,setSpark]=useState([]);
+      const [tools,setTools]=useState([]);
+      const [clients,setClients]=useState([]);
+      const [loading,setLoading]=useState(true);
+
+      useEffect(()=>{
+        let alive=true;
+        async function load() {
+          setLoading(true);
+          try {
+            const [h,s,ci]=await Promise.allSettled([
+              apiFetch('/health',adminKey),apiFetch('/stats',adminKey),apiFetch('/circuits',adminKey)
+            ]);
+            if(!alive) return;
+            if(h.status==='fulfilled') setHealth(h.value);
+            if(s.status==='fulfilled') setStats(s.value);
+            if(ci.status==='fulfilled') setCircuits(ci.value.circuits||[]);
+            const now=new Date(), from=new Date(now-30*60000).toISOString();
+            const lr=await apiFetch('/logs?limit=2000&from='+encodeURIComponent(from),adminKey);
+            if(!alive) return;
+            const logs=lr.logs||[];
+            const bkts={};
+            for(let i=0;i<30;i++){
+              const t=new Date(now-(29-i)*60000);
+              const k=t.getHours()+':'+String(t.getMinutes()).padStart(2,'0');
+              bkts[k]={time:k,reqs:0};
+            }
+            for(const l of logs){
+              const d=new Date(l.timestamp);
+              const k=d.getHours()+':'+String(d.getMinutes()).padStart(2,'0');
+              if(bkts[k]) bkts[k].reqs++;
+            }
+            setSpark(Object.values(bkts));
+            const tc={};
+            for(const l of logs) if(l.tool_name) tc[l.tool_name]=(tc[l.tool_name]||0)+1;
+            setTools(Object.entries(tc).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([name,count])=>({name,count})));
+            const cc={};
+            for(const l of logs) if(l.client_id) cc[l.client_id]=(cc[l.client_id]||0)+1;
+            setClients(Object.entries(cc).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([name,count])=>({name,count})));
+          } catch(e){console.error('[conduit]',e);}
+          if(alive) setLoading(false);
+        }
+        load(); return ()=>{alive=false;};
+      },[adminKey,tick]);
+
+      const ab=health?.backends?.filter(b=>b.healthy)?.length??0;
+      const tb=health?.backends?.length??0;
+      const rq=stats?.requests??{};
+      const cs=stats?.cache??{};
+
+      return (
+        <div style={{padding:'28px 32px',maxWidth:1400}}>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'24px'}}>
+            <div>
+              <h1 style={{fontSize:'22px',fontWeight:700}}>Overview</h1>
+              {health&&(
+                <div style={{display:'flex',alignItems:'center',gap:'8px',marginTop:'5px'}}>
+                  <Dot ok={health.status==='ok'}/>
+                  <span style={{fontSize:'13px',color:health.status==='ok'?'#30D158':'#FFD60A',fontWeight:500}}>
+                    {health.status==='ok'?'All systems operational':'Degraded'}
+                  </span>
+                  <span style={{color:'#3c3c3e'}}>·</span>
+                  <span style={{fontSize:'13px',color:'#48484a'}}>Up {fmtUp(health.uptime_seconds)}</span>
+                </div>
+              )}
+            </div>
+            {loading&&(
+              <div style={{display:'flex',alignItems:'center',gap:'7px',fontSize:'12px',color:'#48484a'}}>
+                <div className="rp-blink" style={{width:'6px',height:'6px',borderRadius:'50%',background:'#0A84FF'}}/>
+                Refreshing…
+              </div>
+            )}
+          </div>
+
+          <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'14px',marginBottom:'14px'}}>
+            <StatCard label="Total Requests"  value={fmt(rq.total_requests)}     sub={fmt(rq.requests_per_minute,2)+' req/min'}             color="blue"/>
+            <StatCard label="Avg Latency"     value={fmtMs(rq.avg_latency_ms)}   sub={'p95: '+fmtMs(rq.p95_ms)}                            color="yellow"/>
+            <StatCard label="Cache Hit Rate"  value={fmtPct(cs.hitRate)}          sub={fmt(cs.entries)+' entries cached'}                    color="green"/>
+            <StatCard label="Error Rate"      value={fmtPct(rq.error_rate)}       sub={ab+'/'+tb+' backends healthy'}                       color={rq.error_rate>0.05?'red':'green'}/>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'14px',marginBottom:'20px'}}>
+            <StatCard label="Cache Hits"   value={fmt(cs.hits)}       sub={fmt(cs.misses)+' misses'}  color="blue"/>
+            <StatCard label="p50 Latency"  value={fmtMs(rq.p50_ms)}                                   color="blue"/>
+            <StatCard label="p99 Latency"  value={fmtMs(rq.p99_ms)}                                   color="yellow"/>
+            <StatCard label="Backends"     value={ab+' / '+tb}        sub="healthy / total"            color={ab===tb?'green':'yellow'}/>
+          </div>
+
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'14px',marginBottom:'14px'}}>
+            <Card style={{padding:'20px 22px'}}>
+              <p style={{fontSize:'11px',fontWeight:500,color:'#48484a',textTransform:'uppercase',letterSpacing:'.08em',marginBottom:'14px'}}>Requests / min — last 30 min</p>
+              {spark.some(b=>b.reqs>0)?(
+                <ResponsiveContainer width="100%" height={130}>
+                  <AreaChart data={spark} margin={{top:4,right:4,bottom:0,left:-24}}>
+                    <defs><linearGradient id="gr" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#0A84FF" stopOpacity={.3}/><stop offset="95%" stopColor="#0A84FF" stopOpacity={0}/></linearGradient></defs>
+                    <XAxis dataKey="time" stroke="transparent" tick={{fontSize:10,fill:'#48484a'}} interval={4}/>
+                    <YAxis stroke="transparent" tick={{fontSize:10,fill:'#48484a'}} width={28}/>
+                    <Tooltip {...TT}/>
+                    <Area type="monotone" dataKey="reqs" name="requests" stroke="#0A84FF" fill="url(#gr)" strokeWidth={2} dot={false}/>
+                  </AreaChart>
+                </ResponsiveContainer>
+              ):<Empty msg="No requests in the last 30 minutes"/>}
+            </Card>
+            <Card style={{padding:'20px 22px'}}>
+              <p style={{fontSize:'11px',fontWeight:500,color:'#48484a',textTransform:'uppercase',letterSpacing:'.08em',marginBottom:'14px'}}>Top 5 Tools — last 30 min</p>
+              {tools.length>0?(
+                <ResponsiveContainer width="100%" height={130}>
+                  <BarChart data={tools} layout="vertical" margin={{top:0,right:6,bottom:0,left:4}}>
+                    <XAxis type="number" stroke="transparent" tick={{fontSize:10,fill:'#48484a'}}/>
+                    <YAxis type="category" dataKey="name" stroke="transparent" tick={{fontSize:11,fill:'#98989d'}} width={100}/>
+                    <Tooltip {...TT}/>
+                    <Bar dataKey="count" name="calls" fill="#0A84FF" radius={[0,4,4,0]} opacity={.85}/>
+                  </BarChart>
+                </ResponsiveContainer>
+              ):<Empty msg="No tool calls yet"/>}
+            </Card>
+          </div>
+
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'14px',marginBottom:'14px'}}>
+            <Card style={{padding:'20px 22px'}}>
+              <p style={{fontSize:'11px',fontWeight:500,color:'#48484a',textTransform:'uppercase',letterSpacing:'.08em',marginBottom:'14px'}}>Top 5 Clients — last 30 min</p>
+              {clients.length>0?(
+                <ResponsiveContainer width="100%" height={130}>
+                  <BarChart data={clients} layout="vertical" margin={{top:0,right:6,bottom:0,left:4}}>
+                    <XAxis type="number" stroke="transparent" tick={{fontSize:10,fill:'#48484a'}}/>
+                    <YAxis type="category" dataKey="name" stroke="transparent" tick={{fontSize:11,fill:'#98989d'}} width={100}/>
+                    <Tooltip {...TT}/>
+                    <Bar dataKey="count" name="requests" fill="#30D158" radius={[0,4,4,0]} opacity={.85}/>
+                  </BarChart>
+                </ResponsiveContainer>
+              ):<Empty msg="No client activity yet"/>}
+            </Card>
+            <Card style={{padding:'20px 22px'}}>
+              <p style={{fontSize:'11px',fontWeight:500,color:'#48484a',textTransform:'uppercase',letterSpacing:'.08em',marginBottom:'14px'}}>Backend Health</p>
+              {health?.backends?.length>0?(
+                <div style={{display:'flex',flexDirection:'column',gap:'7px'}}>
+                  {health.backends.map(b=>(
+                    <div key={b.id} style={{display:'flex',alignItems:'center',justifyContent:'space-between',background:'rgba(255,255,255,.03)',borderRadius:'10px',padding:'10px 14px'}}>
+                      <div style={{display:'flex',alignItems:'center',gap:'10px'}}>
+                        <Dot ok={b.healthy}/>
+                        <span style={{fontSize:'13px',fontWeight:500}}>{b.id}</span>
+                      </div>
+                      <div style={{display:'flex',alignItems:'center',gap:'10px'}}>
+                        <span className="mono" style={{fontSize:'12px',color:'#98989d'}}>{b.latency_ms!=null?Math.round(b.latency_ms)+'ms':'—'}</span>
+                        {b.last_checked&&<span style={{fontSize:'11px',color:'#3c3c3e'}}>{fmtTime(b.last_checked)}</span>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ):<Empty msg="No backends configured"/>}
+            </Card>
+          </div>
+
+          {circuits.length>0&&(
+            <Card style={{padding:'20px 22px'}}>
+              <p style={{fontSize:'11px',fontWeight:500,color:'#48484a',textTransform:'uppercase',letterSpacing:'.08em',marginBottom:'14px'}}>Circuit Breakers</p>
+              <div style={{display:'flex',flexWrap:'wrap',gap:'8px'}}>
+                {circuits.map((cb,i)=>(
+                  <div key={i} style={{display:'flex',alignItems:'center',gap:'8px',background:'rgba(255,255,255,.03)',borderRadius:'10px',padding:'8px 12px'}}>
+                    <span style={{fontSize:'13px',fontWeight:500}}>{cb.server_id}</span>
+                    {cb.replica_index!==-1&&<span style={{fontSize:'11px',color:'#48484a'}}>#{cb.replica_index}</span>}
+                    <Bdg v={cb.state==='closed'?'s':cb.state==='open'?'e':'w'}>{cb.state}</Bdg>
+                    {cb.failures>0&&<span style={{fontSize:'11px',color:'#48484a'}}>{cb.failures} fail</span>}
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+        </div>
+      );
+    }
+
+    // ─── Logs ────────────────────────────────────────────────────────────────
+    function LogsView({adminKey, tick}) {
+      const LIMIT=50;
+      const [logs,setLogs]=useState([]);
+      const [total,setTotal]=useState(0);
+      const [offset,setOffset]=useState(0);
+      const [loading,setLoading]=useState(true);
+      const [err,setErr]=useState(null);
+      const [serverF,setServerF]=useState('');
+      const [toolF,setToolF]=useState('');
+      const [statusF,setStatusF]=useState('');
+      const [trace,setTrace]=useState(null);
+      const [traceLoading,setTraceLoading]=useState(false);
+
+      const fetchLogs=useCallback(async(off=0)=>{
+        setLoading(true); setErr(null);
+        try {
+          let url='/logs?limit='+LIMIT+'&offset='+off;
+          if(serverF) url+='&server='+encodeURIComponent(serverF);
+          if(toolF)   url+='&tool='+encodeURIComponent(toolF);
+          if(statusF) url+='&status='+encodeURIComponent(statusF);
+          const d=await apiFetch(url,adminKey);
+          if(off===0) setLogs(d.logs||[]); else setLogs(p=>[...p,...(d.logs||[])]);
+          setTotal(d.count??0); setOffset(off);
+        } catch(e){setErr(e.message);}
+        setLoading(false);
+      },[adminKey,serverF,toolF,statusF]);
+
+      useEffect(()=>{fetchLogs(0);},[adminKey,tick,serverF,toolF,statusF]);
+
+      const openTrace=async(id)=>{
+        setTraceLoading(true);
+        try { const d=await apiFetch('/logs/trace/'+encodeURIComponent(id),adminKey); setTrace(d); }
+        catch(e){console.error(e);}
+        setTraceLoading(false);
+      };
+
+      const sv=(s)=>s==='success'?'s':s==='error'?'e':'d';
+      const cv=(cs)=>!cs?null:cs==='HIT'?'h':'d';
+
+      return (
+        <div style={{padding:'28px 32px'}}>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'22px'}}>
+            <h1 style={{fontSize:'22px',fontWeight:700}}>Request Logs</h1>
+            <span style={{fontSize:'13px',color:'#48484a'}}>{total} entries</span>
+          </div>
+
+          <div style={{display:'flex',gap:'10px',marginBottom:'18px',flexWrap:'wrap',alignItems:'center'}}>
+            <div style={{position:'relative'}}>
+              <span style={{position:'absolute',left:'9px',top:'50%',transform:'translateY(-50%)',color:'#48484a',pointerEvents:'none',display:'flex'}}><I.Server/></span>
+              <input type="text" placeholder="Server…" value={serverF} onChange={e=>setServerF(e.target.value)}
+                className="nx-input" style={{paddingLeft:'28px',width:'130px'}}/>
+            </div>
+            <div style={{position:'relative'}}>
+              <span style={{position:'absolute',left:'9px',top:'50%',transform:'translateY(-50%)',color:'#48484a',pointerEvents:'none',display:'flex'}}><I.Srch/></span>
+              <input type="text" placeholder="Tool…" value={toolF} onChange={e=>setToolF(e.target.value)}
+                className="nx-input" style={{paddingLeft:'28px',width:'130px'}}/>
+            </div>
+            <div style={{display:'flex',gap:'6px'}}>
+              {['','success','error'].map(s=>(
+                <button key={s} onClick={()=>setStatusF(s)} style={{
+                  padding:'6px 14px',borderRadius:'20px',border:'none',fontFamily:'inherit',
+                  fontSize:'12px',fontWeight:500,cursor:'pointer',
+                  background:statusF===s?'rgba(10,132,255,.15)':'rgba(255,255,255,.04)',
+                  color:statusF===s?'#0A84FF':'#98989d',transition:'all .15s'
+                }}>{s||'All'}</button>
+              ))}
+            </div>
+            <button onClick={()=>fetchLogs(0)} className="nx-btn"><I.Ref/> Refresh</button>
+          </div>
+
+          <Err err={err}/>
+
+          <Card>
+            <div style={{overflowX:'auto'}}>
+              <table className="nx-tbl" style={{minWidth:'700px'}}>
+                <thead>
+                  <tr>{['Time','Trace','Client','Server','Tool','Status','Duration','Cache'].map(h=><th key={h}>{h}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {logs.length===0&&!loading?(
+                    <tr><td colSpan={8} style={{padding:0}}><Empty msg="No logs match your filters"/></td></tr>
+                  ):logs.map((l,i)=>(
+                    <tr key={i} onClick={()=>openTrace(l.trace_id)}>
+                      <td className="mono" style={{fontSize:'12px',color:'#48484a',whiteSpace:'nowrap'}}>{fmtTime(l.timestamp)}</td>
+                      <td><span className="mono" style={{fontSize:'11px',color:'#0A84FF'}} title={l.trace_id}>{l.trace_id?l.trace_id.slice(0,8)+'…':'—'}</span></td>
+                      <td className="mono" style={{fontSize:'11px',color:'#48484a',maxWidth:'100px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{l.client_id||'—'}</td>
+                      <td style={{fontSize:'12px',color:'#98989d'}}>{l.server_id||'—'}</td>
+                      <td style={{fontSize:'13px',fontWeight:500}}>{l.tool_name||l.method}</td>
+                      <td><Bdg v={sv(l.status)}>{l.status}</Bdg></td>
+                      <td className={'mono '+durCls(l.duration_ms)} style={{fontSize:'12px',textAlign:'right'}}>{fmtMs(l.duration_ms)}</td>
+                      <td>{l.cache_status&&<Bdg v={cv(l.cache_status)}>{l.cache_status}</Bdg>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {loading&&<Spinner/>}
+            {!loading&&logs.length<total&&(
+              <div style={{padding:'14px',display:'flex',justifyContent:'center',borderTop:'1px solid #2c2c2e'}}>
+                <button onClick={()=>fetchLogs(offset+LIMIT)} className="nx-btn">Load more — {total-logs.length} remaining</button>
+              </div>
+            )}
+          </Card>
+
+          {(trace||traceLoading)&&(
+            <div className="fade-in" style={{position:'fixed',inset:0,background:'rgba(0,0,0,.82)',backdropFilter:'blur(8px)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:50,padding:'16px'}}>
+              <div className="slide-in nx-card" style={{width:'100%',maxWidth:'580px',maxHeight:'80vh',overflow:'auto'}}>
+                <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'18px 22px',borderBottom:'1px solid #2c2c2e',position:'sticky',top:0,background:'#1c1c1e',borderRadius:'16px 16px 0 0'}}>
+                  <div>
+                    <p style={{fontWeight:600,fontSize:'15px'}}>Trace Details</p>
+                    {trace&&<p className="mono" style={{fontSize:'11px',color:'#48484a',marginTop:'2px'}}>{trace.trace_id}</p>}
+                  </div>
+                  <button onClick={()=>setTrace(null)} style={{background:'rgba(255,255,255,.06)',border:'none',borderRadius:'8px',color:'#98989d',cursor:'pointer',padding:'6px',display:'flex'}}>
+                    <I.X/>
+                  </button>
+                </div>
+                <div style={{padding:'18px 22px',display:'flex',flexDirection:'column',gap:'10px'}}>
+                  {traceLoading&&<Spinner/>}
+                  {trace?.logs?.map((l,i)=>(
+                    <div key={i} style={{background:'rgba(255,255,255,.03)',borderRadius:'10px',padding:'14px 16px'}}>
+                      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'8px'}}>
+                        <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
+                          <Bdg v={l.status==='success'?'s':'e'}>{l.status}</Bdg>
+                          <span style={{fontWeight:500,fontSize:'14px'}}>{l.tool_name||l.method}</span>
+                        </div>
+                        <span className="mono" style={{fontSize:'12px',color:'#48484a'}}>{fmtMs(l.duration_ms)}</span>
+                      </div>
+                      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'4px',fontSize:'12px',color:'#48484a'}}>
+                        <span>Server: <span style={{color:'#98989d'}}>{l.server_id}</span></span>
+                        <span>Client: <span style={{color:'#98989d'}}>{l.client_id||'—'}</span></span>
+                        <span>Time: <span style={{color:'#98989d'}}>{fmtDate(l.timestamp)}</span></span>
+                        {l.cache_status&&<span>Cache: <span style={{color:'#98989d'}}>{l.cache_status}</span></span>}
+                        {l.error_message&&<span style={{gridColumn:'1 / -1',color:'#FF453A',marginTop:'4px'}}>Error: {l.error_message}</span>}
+                      </div>
+                    </div>
+                  ))}
+                  {trace&&(!trace.logs||trace.logs.length===0)&&<Empty msg="No entries for this trace"/>}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ─── Servers ─────────────────────────────────────────────────────────────
+    function ServersView({adminKey, tick}) {
+      const [servers,setServers]=useState([]);
+      const [circuits,setCircuits]=useState({});
+      const [loading,setLoading]=useState(true);
+      const [err,setErr]=useState(null);
+      const [expanded,setExpanded]=useState({});
+
+      useEffect(()=>{
+        let alive=true;
+        async function load() {
+          setLoading(true); setErr(null);
+          try {
+            const [s,c]=await Promise.allSettled([apiFetch('/servers',adminKey),apiFetch('/circuits',adminKey)]);
+            if(!alive) return;
+            if(s.status==='fulfilled') setServers(s.value.servers||[]);
+            if(c.status==='fulfilled'){
+              const map={};
+              for(const cb of (c.value.circuits||[])){if(!map[cb.server_id])map[cb.server_id]=[];map[cb.server_id].push(cb);}
+              setCircuits(map);
+            }
+          }catch(e){if(alive)setErr(e.message);}
+          if(alive)setLoading(false);
+        }
+        load(); return()=>{alive=false;};
+      },[adminKey,tick]);
+
+      const toggle=(id)=>setExpanded(p=>({...p,[id]:!p[id]}));
+      const cbv=(st)=>st==='closed'?'s':st==='open'?'e':'w';
+
+      if(loading) return <div style={{padding:'32px'}}><Spinner/></div>;
+
+      return (
+        <div style={{padding:'28px 32px'}}>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'24px'}}>
+            <h1 style={{fontSize:'22px',fontWeight:700}}>Backend Servers</h1>
+            <span style={{fontSize:'13px',color:'#48484a'}}>{servers.length} server{servers.length!==1?'s':''}</span>
+          </div>
+          <Err err={err}/>
+          <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
+            {servers.length===0?<Card style={{padding:'24px'}}><Empty msg="No servers configured"/></Card>:
+              servers.map(sv=>{
+                const cbs=circuits[sv.id]||[];
+                const open=expanded[sv.id];
+                const pcb=cbs.find(c=>c.replica_index===-1||c.replica_index==null);
+                return (
+                  <div key={sv.id} className="nx-card sv-card">
+                    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'16px 20px',cursor:'pointer'}} onClick={()=>toggle(sv.id)}>
+                      <div style={{display:'flex',alignItems:'center',gap:'12px'}}>
+                        <span style={{color:'#3c3c3e',transition:'transform .15s',transform:open?'rotate(90deg)':'none',display:'flex'}}><I.ChevR/></span>
+                        <Dot ok={sv.healthy} lg/>
+                        <div>
+                          <p style={{fontWeight:600,fontSize:'15px'}}>{sv.id}</p>
+                          <p className="mono" style={{fontSize:'11px',color:'#48484a',marginTop:'2px'}}>{sv.url}</p>
+                        </div>
+                      </div>
+                      <div style={{display:'flex',alignItems:'center',gap:'18px'}}>
+                        <div style={{textAlign:'right'}}>
+                          <p className="mono" style={{fontSize:'14px',fontWeight:500}}>{sv.latency_ms!=null?Math.round(sv.latency_ms)+'ms':'—'}</p>
+                          <p style={{fontSize:'11px',color:'#48484a'}}>latency</p>
+                        </div>
+                        <div style={{textAlign:'right'}}>
+                          <p style={{fontSize:'14px',fontWeight:500}}>{sv.tools_count}</p>
+                          <p style={{fontSize:'11px',color:'#48484a'}}>tools</p>
+                        </div>
+                        {pcb&&<Bdg v={cbv(pcb.state)}>{pcb.state}</Bdg>}
+                      </div>
+                    </div>
+
+                    {open&&(
+                      <div className="slide-in" style={{borderTop:'1px solid #2c2c2e',padding:'14px 20px',display:'flex',flexDirection:'column',gap:'14px'}}>
+                        {sv.tools?.length>0&&(
+                          <div>
+                            <p style={{fontSize:'11px',fontWeight:500,color:'#48484a',textTransform:'uppercase',letterSpacing:'.08em',marginBottom:'8px'}}>Tools ({sv.tools_count})</p>
+                            <div style={{display:'flex',flexWrap:'wrap',gap:'6px'}}>
+                              {sv.tools.map(t=>(
+                                <span key={t} className="mono" style={{background:'rgba(255,255,255,.04)',border:'1px solid #3c3c3e',borderRadius:'8px',padding:'4px 10px',fontSize:'12px',color:'#98989d'}}>{t}</span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {sv.replicas?.length>0&&(
+                          <div>
+                            <p style={{fontSize:'11px',fontWeight:500,color:'#48484a',textTransform:'uppercase',letterSpacing:'.08em',marginBottom:'8px'}}>Replicas</p>
+                            <div style={{display:'flex',flexDirection:'column',gap:'6px'}}>
+                              {sv.replicas.map(r=>{
+                                const rcb=cbs.find(c=>c.replica_index===r.index);
+                                return (
+                                  <div key={r.index} style={{display:'flex',alignItems:'center',justifyContent:'space-between',background:'rgba(255,255,255,.03)',borderRadius:'8px',padding:'10px 14px'}}>
+                                    <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
+                                      <Dot ok={r.healthy}/>
+                                      <span className="mono" style={{fontSize:'12px',color:'#98989d'}}>{r.url}</span>
+                                      <Bdg>#{r.index}</Bdg>
+                                    </div>
+                                    <div style={{display:'flex',alignItems:'center',gap:'10px',fontSize:'12px',color:'#48484a'}}>
+                                      <span className="mono">{r.latency_ms!=null?Math.round(r.latency_ms)+'ms':'—'}</span>
+                                      <span>{r.active_connections} conn</span>
+                                      {rcb&&<Bdg v={cbv(rcb.state)}>{rcb.state}</Bdg>}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+                        {cbs.length>0&&(
+                          <div>
+                            <p style={{fontSize:'11px',fontWeight:500,color:'#48484a',textTransform:'uppercase',letterSpacing:'.08em',marginBottom:'8px'}}>Circuit Breakers</p>
+                            <div style={{display:'flex',flexWrap:'wrap',gap:'8px'}}>
+                              {cbs.map((cb,i)=>(
+                                <div key={i} style={{display:'flex',alignItems:'center',gap:'8px',background:'rgba(255,255,255,.03)',borderRadius:'8px',padding:'8px 12px',fontSize:'12px'}}>
+                                  <span style={{color:'#98989d'}}>{cb.replica_index>=0?'Replica '+cb.replica_index:'Primary'}</span>
+                                  <Bdg v={cbv(cb.state)}>{cb.state}</Bdg>
+                                  {cb.failures>0&&<span style={{color:'#48484a'}}>{cb.failures} fail</span>}
+                                  {cb.trip_count>0&&<span style={{color:'#48484a'}}>{cb.trip_count} trips</span>}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })
+            }
+          </div>
+        </div>
+      );
+    }
+
+    // ─── Cache ───────────────────────────────────────────────────────────────
+    function Ring({pct, size=96, sw=7, color='#30D158'}) {
+      const r=(size-sw)/2, circ=2*Math.PI*r, dash=circ*Math.min(pct/100,1);
+      return (
+        <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+          <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="#2c2c2e" strokeWidth={sw}/>
+          <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth={sw}
+            strokeDasharray={`${dash} ${circ}`} strokeLinecap="round"
+            transform={`rotate(-90 ${size/2} ${size/2})`} style={{transition:'stroke-dasharray .5s'}}/>
+        </svg>
+      );
+    }
+
+    function CacheView({adminKey, tick}) {
+      const [cs,setCs]=useState(null);
+      const [servers,setServers]=useState([]);
+      const [topTools,setTopTools]=useState([]);
+      const [loading,setLoading]=useState(true);
+      const [err,setErr]=useState(null);
+      const [flushing,setFlushing]=useState('');
+      const [msg,setMsg]=useState('');
+      const [confirm,setConfirm]=useState('');
+
+      useEffect(()=>{
+        let alive=true;
+        async function load() {
+          setLoading(true); setErr(null);
+          try {
+            const [c,sv]=await Promise.allSettled([apiFetch('/cache/stats',adminKey),apiFetch('/servers',adminKey)]);
+            if(!alive) return;
+            if(c.status==='fulfilled') setCs(c.value.l1 || c.value);
+            if(sv.status==='fulfilled') setServers(sv.value.servers||[]);
+            const lr=await apiFetch('/logs?limit=500',adminKey);
+            if(!alive) return;
+            const hits={};
+            for(const l of (lr.logs||[])){if(l.cache_status==='HIT'&&l.tool_name) hits[l.tool_name]=(hits[l.tool_name]||0)+1;}
+            setTopTools(Object.entries(hits).sort((a,b)=>b[1]-a[1]).slice(0,10).map(([name,count])=>({name,count})));
+          }catch(e){if(alive)setErr(e.message);}
+          if(alive)setLoading(false);
+        }
+        load(); return()=>{alive=false;};
+      },[adminKey,tick]);
+
+      const flush=async(id)=>{
+        if(confirm!==id){setConfirm(id); return;}
+        setFlushing(id); setMsg(''); setErr(null); setConfirm('');
+        try { const d=await apiDelete('/cache/server/'+encodeURIComponent(id),adminKey); setMsg('Flushed '+(d.deleted_count||0)+' entries from '+id); }
+        catch(e){setErr(e.message);}
+        setFlushing('');
+      };
+
+      const hrPct=cs?Math.round(cs.hitRate*100):0;
+      if(loading) return <div style={{padding:'32px'}}><Spinner/></div>;
+
+      return (
+        <div style={{padding:'28px 32px'}}>
+          <h1 style={{fontSize:'22px',fontWeight:700,marginBottom:'24px'}}>Cache</h1>
+          <Err err={err}/>
+          {msg&&<div style={{background:'rgba(48,209,88,.08)',border:'1px solid rgba(48,209,88,.2)',borderRadius:'10px',padding:'10px 14px',color:'#30D158',fontSize:'13px',marginBottom:'14px'}}>{msg}</div>}
+
+          <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'14px',marginBottom:'18px'}}>
+            <StatCard label="Hit Rate"   value={fmtPct(cs?.hitRate)} sub="session lifetime"          color="green"/>
+            <StatCard label="Entries"    value={fmt(cs?.entries)}    sub="currently cached"           color="blue"/>
+            <StatCard label="Cache Hits" value={fmt(cs?.hits)}       sub={fmt(cs?.misses)+' misses'}  color="blue"/>
+            <StatCard label="Skips"      value={fmt(cs?.skips)}      sub="non-cacheable"              color="yellow"/>
+          </div>
+
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'14px',marginBottom:'14px'}}>
+            <Card style={{padding:'22px 24px'}}>
+              <p style={{fontSize:'11px',fontWeight:500,color:'#48484a',textTransform:'uppercase',letterSpacing:'.08em',marginBottom:'18px'}}>Hit Rate</p>
+              <div style={{display:'flex',alignItems:'center',gap:'24px'}}>
+                <div style={{position:'relative',flexShrink:0}}>
+                  <Ring pct={hrPct}/>
+                  <div style={{position:'absolute',inset:0,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center'}}>
+                    <span style={{fontSize:'18px',fontWeight:700,color:'#30D158'}}>{hrPct}%</span>
+                  </div>
+                </div>
+                <div style={{display:'flex',flexDirection:'column',gap:'12px'}}>
+                  <div>
+                    <p style={{fontSize:'11px',color:'#48484a',marginBottom:'2px'}}>Hits</p>
+                    <p className="mono" style={{fontSize:'22px',fontWeight:700,color:'#30D158'}}>{fmt(cs?.hits)}</p>
+                  </div>
+                  <div>
+                    <p style={{fontSize:'11px',color:'#48484a',marginBottom:'2px'}}>Misses</p>
+                    <p className="mono" style={{fontSize:'22px',fontWeight:700,color:'#98989d'}}>{fmt(cs?.misses)}</p>
+                  </div>
+                </div>
+              </div>
+            </Card>
+
+            <Card style={{padding:'22px 24px'}}>
+              <p style={{fontSize:'11px',fontWeight:500,color:'#48484a',textTransform:'uppercase',letterSpacing:'.08em',marginBottom:'14px'}}>Top Cached Tools</p>
+              {topTools.length>0?(
+                <ResponsiveContainer width="100%" height={170}>
+                  <BarChart data={topTools} layout="vertical" margin={{top:0,right:6,bottom:0,left:4}}>
+                    <XAxis type="number" stroke="transparent" tick={{fontSize:10,fill:'#48484a'}}/>
+                    <YAxis type="category" dataKey="name" stroke="transparent" tick={{fontSize:11,fill:'#98989d'}} width={100}/>
+                    <Tooltip {...TT}/>
+                    <Bar dataKey="count" name="hits" fill="#30D158" radius={[0,4,4,0]} opacity={.85}/>
+                  </BarChart>
+                </ResponsiveContainer>
+              ):<Empty msg="No cache hits recorded yet"/>}
+            </Card>
+          </div>
+
+          <Card style={{padding:'22px 24px'}}>
+            <p style={{fontSize:'11px',fontWeight:500,color:'#48484a',textTransform:'uppercase',letterSpacing:'.08em',marginBottom:'14px'}}>Flush Cache by Server</p>
+            <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+              {servers.length===0?<Empty msg="No servers available"/>:
+                servers.map(sv=>(
+                  <div key={sv.id} style={{display:'flex',alignItems:'center',justifyContent:'space-between',background:'rgba(255,255,255,.03)',borderRadius:'10px',padding:'12px 16px'}}>
+                    <div style={{display:'flex',alignItems:'center',gap:'10px'}}>
+                      <Dot ok={sv.healthy}/>
+                      <span style={{fontSize:'14px',fontWeight:500}}>{sv.id}</span>
+                      <span style={{fontSize:'12px',color:'#48484a'}}>{sv.tools_count} tools</span>
+                    </div>
+                    <button onClick={()=>flush(sv.id)} disabled={flushing===sv.id} className="nx-btn-d">
+                      <I.Trash/>
+                      {flushing===sv.id?'Flushing…':confirm===sv.id?'Confirm?':'Flush'}
+                    </button>
+                  </div>
+                ))
+              }
+            </div>
+          </Card>
+        </div>
+      );
+    }
+
+    // ─── Rate Limits ─────────────────────────────────────────────────────────
+    function LimitsView({adminKey, tick}) {
+      const [data,setData]=useState(null);
+      const [loading,setLoading]=useState(true);
+      const [err,setErr]=useState(null);
+
+      useEffect(()=>{
+        let alive=true;
+        async function load() {
+          setLoading(true); setErr(null);
+          try { const d=await apiFetch('/limits',adminKey); if(alive) setData(d); }
+          catch(e){if(alive)setErr(e.message);}
+          if(alive)setLoading(false);
+        }
+        load(); return()=>{alive=false;};
+      },[adminKey,tick]);
+
+      if(loading) return <div style={{padding:'32px'}}><Spinner/></div>;
+
+      if(!data?.enabled) {
+        return (
+          <div style={{padding:'28px 32px'}}>
+            <h1 style={{fontSize:'22px',fontWeight:700,marginBottom:'24px'}}>Rate Limits</h1>
+            <Card style={{padding:'48px',textAlign:'center'}}>
+              <p style={{fontSize:'14px',color:'#48484a',marginBottom:'4px'}}>Rate limiting is not enabled</p>
+              <p className="mono" style={{fontSize:'12px',color:'#3c3c3e'}}>Add rate_limits.enabled: true to your config</p>
+            </Card>
+          </div>
+        );
+      }
+
+      const buckets=data.buckets||[];
+
+      return (
+        <div style={{padding:'28px 32px'}}>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'24px'}}>
+            <h1 style={{fontSize:'22px',fontWeight:700}}>Rate Limits</h1>
+            <Bdg v="s">Enabled</Bdg>
+          </div>
+          <Err err={err}/>
+          {buckets.length===0?(
+            <Card style={{padding:'32px'}}><Empty msg="No active rate limit buckets"/></Card>
+          ):(
+            <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
+              {buckets.map((b,i)=>{
+                const label=b.key||('Bucket '+(i+1));
+                const age=b.oldest?Math.round((Date.now()-b.oldest)/1000):null;
+                const pct=Math.min(b.count*2,100);
+                const color=pct<50?'#30D158':pct<80?'#FFD60A':'#FF453A';
+                return (
+                  <Card key={i} style={{padding:'16px 20px'}}>
+                    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'10px'}}>
+                      <div>
+                        <p className="mono" style={{fontSize:'13px',fontWeight:500}}>{label}</p>
+                        {age!=null&&<p style={{fontSize:'11px',color:'#48484a',marginTop:'2px'}}>Window age: {age}s</p>}
+                      </div>
+                      <div style={{textAlign:'right'}}>
+                        <p className="mono" style={{fontSize:'16px',fontWeight:700,color}}>{b.count}</p>
+                        <p style={{fontSize:'11px',color:'#48484a'}}>requests</p>
+                      </div>
+                    </div>
+                    <div style={{height:'4px',borderRadius:'2px',background:'#2c2c2e',overflow:'hidden'}}>
+                      <div style={{height:'100%',borderRadius:'2px',width:pct+'%',background:color,transition:'width .5s ease,background .3s'}}/>
+                    </div>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ─── ACL ─────────────────────────────────────────────────────────────────
+    function AclView({adminKey}) {
+      const [client,setClient]=useState('');
+      const [server,setServer]=useState('');
+      const [tool,setTool]=useState('');
+      const [result,setResult]=useState(null);
+      const [loading,setLoading]=useState(false);
+      const [err,setErr]=useState(null);
+
+      const check=async()=>{
+        if(!client||!server||!tool) return;
+        setLoading(true); setErr(null); setResult(null);
+        try {
+          const url='/acl/check?client='+encodeURIComponent(client)+'&server='+encodeURIComponent(server)+'&tool='+encodeURIComponent(tool);
+          const d=await apiFetch(url,adminKey);
+          setResult(d);
+        }catch(e){setErr(e.message);}
+        setLoading(false);
+      };
+
+      return (
+        <div style={{padding:'28px 32px'}}>
+          <h1 style={{fontSize:'22px',fontWeight:700,marginBottom:'24px'}}>Access Control</h1>
+
+          <Card style={{padding:'24px',marginBottom:'14px'}}>
+            <div style={{display:'flex',alignItems:'center',gap:'12px',marginBottom:'20px'}}>
+              <div style={{width:'36px',height:'36px',borderRadius:'10px',background:'rgba(10,132,255,.1)',display:'flex',alignItems:'center',justifyContent:'center',color:'#0A84FF',flexShrink:0}}>
+                <I.Shield/>
+              </div>
+              <div>
+                <p style={{fontWeight:600,fontSize:'15px'}}>Policy Check</p>
+                <p style={{fontSize:'12px',color:'#48484a',marginTop:'1px'}}>Test access without making a real request</p>
+              </div>
+            </div>
+
+            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'12px',marginBottom:'16px'}}>
+              {[{label:'Client ID',val:client,set:setClient,ph:'e.g. client-abc'},{label:'Server ID',val:server,set:setServer,ph:'e.g. server-a'},{label:'Tool Name',val:tool,set:setTool,ph:'e.g. get_contact'}].map(({label,val,set,ph})=>(
+                <div key={label}>
+                  <label style={{display:'block',fontSize:'11px',color:'#48484a',marginBottom:'6px',fontWeight:500,textTransform:'uppercase',letterSpacing:'.06em'}}>{label}</label>
+                  <input type="text" value={val} onChange={e=>set(e.target.value)} onKeyDown={e=>e.key==='Enter'&&check()} placeholder={ph} className="nx-input"/>
+                </div>
+              ))}
+            </div>
+
+            <button onClick={check} disabled={loading||!client||!server||!tool} className="nx-btn-p">
+              {loading?'Checking…':'Check Access'}
+            </button>
+
+            {err&&<div style={{marginTop:'12px'}}><Err err={err}/></div>}
+
+            {result&&(
+              <div className="slide-in" style={{
+                marginTop:'16px',display:'flex',alignItems:'flex-start',gap:'12px',
+                padding:'16px',borderRadius:'12px',border:'1px solid',
+                background:result.allowed?'rgba(48,209,88,.06)':'rgba(255,69,58,.06)',
+                borderColor:result.allowed?'rgba(48,209,88,.2)':'rgba(255,69,58,.2)',
+              }}>
+                <div style={{width:'32px',height:'32px',borderRadius:'50%',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',
+                  background:result.allowed?'rgba(48,209,88,.15)':'rgba(255,69,58,.15)',
+                  color:result.allowed?'#30D158':'#FF453A'}}>
+                  {result.allowed?<I.Chk/>:<I.X/>}
+                </div>
+                <div>
+                  <p style={{fontWeight:600,color:result.allowed?'#30D158':'#FF453A',fontSize:'15px'}}>{result.allowed?'Access Allowed':'Access Denied'}</p>
+                  {result.policy&&<p style={{fontSize:'12px',color:'#98989d',marginTop:'4px'}}>Policy: <span className="mono" style={{color:'#fff'}}>{result.policy}</span></p>}
+                  {result.reason&&<p style={{fontSize:'12px',color:'#98989d',marginTop:'2px'}}>Reason: {result.reason}</p>}
+                </div>
+              </div>
+            )}
+          </Card>
+
+          <Card style={{padding:'24px'}}>
+            <p style={{fontWeight:600,fontSize:'14px',marginBottom:'10px'}}>About ACL Policies</p>
+            <p style={{fontSize:'13px',color:'#48484a',lineHeight:1.65}}>
+              Access Control Lists define which clients may reach which servers and tools.
+              Policies are evaluated in order — the first match wins. Use the checker above
+              to validate access rules without sending real traffic. Configure policies in
+              your gateway YAML under <span className="mono" style={{color:'#98989d',fontSize:'12px'}}>acl.policies</span>.
+            </p>
+          </Card>
+        </div>
+      );
+    }
+
+    // ─── Sidebar ─────────────────────────────────────────────────────────────
+    const NAV = [
+      {id:'overview', label:'Overview',    Icon:I.Grid  },
+      {id:'logs',     label:'Logs',        Icon:I.List  },
+      {id:'servers',  label:'Servers',     Icon:I.Server},
+      {id:'cache',    label:'Cache',       Icon:I.DB    },
+      {id:'limits',   label:'Rate Limits', Icon:I.Gauge },
+      {id:'acl',      label:'ACL',         Icon:I.Shield},
+    ];
+
+    function Sidebar({view, onSelect}) {
+      return (
+        <aside className="nx-sidebar">
+          <div style={{display:'flex',alignItems:'center',gap:'10px',padding:'16px 14px',borderBottom:'1px solid #1c1c1e',flexShrink:0}}>
+            <div style={{width:'32px',height:'32px',flexShrink:0,background:'linear-gradient(135deg,#0A84FF,#0055cc)',borderRadius:'8px',display:'flex',alignItems:'center',justifyContent:'center',boxShadow:'0 0 12px rgba(10,132,255,.35)',color:'#fff'}}>
+              <I.Conduit/>
+            </div>
+            <div className="bn" style={{overflow:'hidden'}}>
+              <p style={{fontSize:'13px',fontWeight:700,letterSpacing:'.1em',textTransform:'uppercase',color:'#fff',lineHeight:1}}>CONDUIT</p>
+              <p style={{fontSize:'10px',color:'#48484a',marginTop:'2px'}}>Gateway</p>
+            </div>
+          </div>
+
+          <nav style={{flex:1,padding:'10px 8px',display:'flex',flexDirection:'column',gap:'2px'}}>
+            {NAV.map(({id,label,Icon})=>(
+              <button key={id} onClick={()=>onSelect(id)} className={'nav-item'+(view===id?' active':'')} title={label}>
+                <span style={{flexShrink:0,display:'flex',width:'18px',height:'18px'}}><Icon/></span>
+                <span className="nl" style={{fontSize:'13px',fontWeight:view===id?600:400}}>{label}</span>
+              </button>
+            ))}
+          </nav>
+
+          <div style={{padding:'12px 14px',borderTop:'1px solid #1c1c1e'}}>
+            <p className="bn mono" style={{fontSize:'10px',color:'#2c2c2e'}}>v0.1.0</p>
+          </div>
+        </aside>
+      );
+    }
+
+    // ─── Login Modal ─────────────────────────────────────────────────────────
+    function LoginModal({onSave}) {
+      const [k,setK]=useState('');
+      return (
+        <div className="fade-in" style={{position:'fixed',inset:0,background:'rgba(0,0,0,.85)',backdropFilter:'blur(10px)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:100,padding:'16px'}}>
+          <div className="slide-in nx-card" style={{width:'100%',maxWidth:'360px',padding:'28px'}}>
+            <div style={{display:'flex',alignItems:'center',gap:'12px',marginBottom:'22px'}}>
+              <div style={{width:'40px',height:'40px',borderRadius:'12px',background:'rgba(255,214,10,.1)',display:'flex',alignItems:'center',justifyContent:'center',color:'#FFD60A',flexShrink:0}}>
+                <I.Key/>
+              </div>
+              <div>
+                <p style={{fontWeight:600,fontSize:'16px'}}>Admin Key Required</p>
+                <p style={{fontSize:'12px',color:'#48484a',marginTop:'2px'}}>Enter your key to continue</p>
+              </div>
+            </div>
+            <input type="password" value={k} onChange={e=>setK(e.target.value)}
+              onKeyDown={e=>e.key==='Enter'&&k&&onSave(k)}
+              placeholder="Admin key…" autoFocus className="nx-input" style={{marginBottom:'14px'}}/>
+            <button onClick={()=>k&&onSave(k)} disabled={!k} className="nx-btn-p" style={{width:'100%',padding:'11px',fontSize:'14px'}}>
+              Authenticate
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // ─── Top Bar ─────────────────────────────────────────────────────────────
+    const TITLES = {overview:'Overview',logs:'Request Logs',servers:'Backend Servers',cache:'Cache',limits:'Rate Limits',acl:'Access Control'};
+
+    function TopBar({view, onChangeKey, secSince}) {
+      return (
+        <header className="nx-topbar">
+          <p style={{fontSize:'13px',fontWeight:500,color:'#98989d'}}>{TITLES[view]||view}</p>
+          <div style={{display:'flex',alignItems:'center',gap:'12px'}}>
+            <div style={{display:'flex',alignItems:'center',gap:'6px',fontSize:'12px',color:'#3c3c3e'}}>
+              <div style={{width:'6px',height:'6px',borderRadius:'50%',background:'#0A84FF',opacity:secSince<3?1:.3,transition:'opacity .5s'}}/>
+              <span>refreshed {secSince}s ago</span>
+            </div>
+            <button onClick={onChangeKey} title="Change admin key" style={{background:'none',border:'none',color:'#3c3c3e',cursor:'pointer',padding:'4px',display:'flex',borderRadius:'6px',transition:'color .15s'}}
+              onMouseEnter={e=>e.currentTarget.style.color='#98989d'}
+              onMouseLeave={e=>e.currentTarget.style.color='#3c3c3e'}>
+              <I.Key/>
+            </button>
+          </div>
+        </header>
+      );
+    }
+
+    // ─── App Root ────────────────────────────────────────────────────────────
+    function App() {
+      const [view,setView]=useState('overview');
+      const [adminKey,setAdminKey]=useState(localStorage.getItem(STORAGE_KEY)||'');
+      const [showLogin,setShowLogin]=useState(false);
+      const [tick,setTick]=useState(0);
+      const [lastTs,setLastTs]=useState(Date.now());
+      const [secSince,setSecSince]=useState(0);
+
+      useEffect(()=>{
+        const id=setInterval(()=>{setTick(t=>t+1);setLastTs(Date.now());setSecSince(0);},REFRESH_MS);
+        return()=>clearInterval(id);
+      },[]);
+      useEffect(()=>{
+        const id=setInterval(()=>setSecSince(Math.floor((Date.now()-lastTs)/1000)),1000);
+        return()=>clearInterval(id);
+      },[lastTs]);
+      useEffect(()=>{
+        apiFetch('/stats',adminKey).catch(e=>{if(e.message==='UNAUTHORIZED')setShowLogin(true);});
+      },[]); // eslint-disable-line
+
+      const saveKey=(k)=>{setAdminKey(k);localStorage.setItem(STORAGE_KEY,k);setShowLogin(false);setTick(t=>t+1);};
+      const props={adminKey,tick};
+
+      return (
+        <div style={{display:'flex',flexDirection:'column',height:'100vh',overflow:'hidden',background:'#0a0a0a'}}>
+          {showLogin&&<LoginModal onSave={saveKey}/>}
+          <div style={{display:'flex',flex:1,overflow:'hidden'}}>
+            <Sidebar view={view} onSelect={setView}/>
+            <div style={{display:'flex',flexDirection:'column',flex:1,overflow:'hidden'}}>
+              <TopBar view={view} onChangeKey={()=>setShowLogin(true)} secSince={secSince}/>
+              <main style={{flex:1,overflowY:'auto'}}>
+                {view==='overview'&&<OverviewView {...props}/>}
+                {view==='logs'    &&<LogsView     {...props}/>}
+                {view==='servers' &&<ServersView  {...props}/>}
+                {view==='cache'   &&<CacheView    {...props}/>}
+                {view==='limits'  &&<LimitsView   {...props}/>}
+                {view==='acl'     &&<AclView      {...props}/>}
+              </main>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+  </script>
+</body>
+</html>

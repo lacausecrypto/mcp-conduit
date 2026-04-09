@@ -1,0 +1,16 @@
+apiVersion: v2
+name: conduit
+description: MCP Gateway — Auth, Cache, Rate Limiting, and Observability for MCP servers
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - mcp
+  - gateway
+  - ai
+  - model-context-protocol
+home: https://github.com/nexusgateway/conduit
+sources:
+  - https://github.com/nexusgateway/conduit
+maintainers:
+  - name: Conduit Team

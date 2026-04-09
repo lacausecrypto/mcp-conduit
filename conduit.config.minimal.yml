@@ -1,0 +1,18 @@
+# yaml-language-server: $schema=conduit.schema.json
+# MCP Conduit — Minimal Configuration
+# This is all you need to get started. Everything else has sensible defaults.
+# Full reference: conduit.config.yml or docs/CONFIGURATION.md
+
+servers:
+  - id: my-server
+    url: http://localhost:3000/mcp
+    cache:
+      default_ttl: 300  # 5 minutes
+
+# Uncomment to add a stdio server (e.g. filesystem):
+#  - id: filesystem
+#    transport: stdio
+#    command: npx
+#    args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+#    cache:
+#      default_ttl: 60

@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Test & coverage
+coverage/
+
+# Logs and databases
+*.log
+*.db
+*.db-shm
+*.db-wal
+conduit-logs.db
+
+# Environment & secrets — never commit real values
+.env
+.env.*
+!.env.example
+
+# Config files with real secrets — only commit the example
+# conduit.config.yml is safe to commit as it ships with example values.
+# For production, use env vars or a separate secret config.
+
+# Benchmark results (generated output)
+benchmark-results.json
+
+# Dev/debug artifacts
+debug-dom.js
+take-screenshots.js
+dashboard-preview.html
+
+# macOS
+.DS_Store
+
+# Editor directories
+.idea/
+.vscode/
+.claude/

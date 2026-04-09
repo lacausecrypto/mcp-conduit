@@ -1,0 +1,39 @@
+version: "3.8"
+
+services:
+  # MCP Conduit — proxies requests to the backend MCP server
+  gateway:
+    build: ../..
+    ports:
+      - "8080:8080"   # MCP gateway
+      - "9090:9090"   # Prometheus metrics
+    volumes:
+      - ./conduit.config.yml:/etc/conduit/config.yml:ro
+      - conduit-data:/data
+    environment:
+      - CONDUIT_CONFIG=/etc/conduit/config.yml
+      - CONDUIT_ADMIN_KEY=changeme
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/conduit/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      - mcp-server
+
+  # Sample MCP server (replace with your real MCP server image)
+  mcp-server:
+    image: node:22-alpine
+    command: >
+      sh -c "
+        npm install -g @modelcontextprotocol/server-everything &&
+        npx @modelcontextprotocol/server-everything
+      "
+    expose:
+      - "3001"
+    environment:
+      - PORT=3001
+
+volumes:
+  conduit-data:

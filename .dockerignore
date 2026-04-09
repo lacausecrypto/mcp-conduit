@@ -1,0 +1,27 @@
+# Build artifacts
+dist/
+*.tsbuildinfo
+
+# Test & development
+tests/
+coverage/
+*.test.ts
+*.spec.ts
+
+# Local config & state
+conduit-logs.db
+conduit-logs.db-shm
+conduit-logs.db-wal
+*.db
+
+# Node
+node_modules/
+
+# Misc
+.git/
+.gitignore
+*.md
+!README.md
+.env
+.env.*
+*.log

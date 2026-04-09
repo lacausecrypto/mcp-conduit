@@ -1,0 +1,49 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: conduit-config
+  namespace: nexus
+data:
+  conduit.config.yml: |
+    gateway:
+      port: 8080
+      host: "0.0.0.0"
+
+    router:
+      namespace_strategy: prefix
+      health_check:
+        enabled: true
+        interval_seconds: 30
+        timeout_ms: 5000
+        unhealthy_threshold: 3
+
+    servers:
+      - id: salesforce
+        url: "http://salesforce-mcp.nexus.svc.cluster.local:3001/mcp"
+        cache:
+          default_ttl: 300
+      - id: github
+        url: "http://github-mcp.nexus.svc.cluster.local:3002/mcp"
+        cache:
+          default_ttl: 120
+
+    cache:
+      enabled: true
+      l1:
+        max_entries: 10000
+        max_entry_size_kb: 64
+
+    tenant_isolation:
+      enabled: false
+      header: Authorization
+
+    observability:
+      log_args: true
+      log_responses: false
+      redact_fields: ["password", "api_key", "token", "secret", "authorization"]
+      retention_days: 30
+      db_path: "/data/conduit-logs.db"
+
+    metrics:
+      enabled: true
+      port: 9090

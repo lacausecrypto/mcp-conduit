@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: conduit
+  namespace: nexus
+  labels:
+    app: conduit
+spec:
+  type: ClusterIP
+  selector:
+    app: conduit
+  ports:
+    - name: http
+      protocol: TCP
+      port: 8080
+      targetPort: http
+    - name: metrics
+      protocol: TCP
+      port: 9090
+      targetPort: metrics
+---
+# Secret — create before applying; replace values with real keys.
+# kubectl create secret generic conduit-secrets \
+#   --namespace nexus \
+#   --from-literal=admin-key=your-admin-key-here
+apiVersion: v1
+kind: Secret
+metadata:
+  name: conduit-secrets
+  namespace: nexus
+type: Opaque
+stringData:
+  admin-key: "change-me-before-production"

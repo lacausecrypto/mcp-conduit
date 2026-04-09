@@ -1,0 +1,37 @@
+# examples/basic/conduit.config.yml
+# Minimal single-server setup — no auth, cache enabled, metrics on port 9090.
+
+gateway:
+  port: 8080
+  host: "0.0.0.0"
+
+router:
+  namespace_strategy: none   # single server — no prefix needed
+  health_check:
+    enabled: true
+    interval_seconds: 30
+    timeout_ms: 5000
+    unhealthy_threshold: 3
+
+servers:
+  - id: my-server
+    url: "http://mcp-server:3001/mcp"
+    cache:
+      default_ttl: 300         # 5-minute default TTL
+
+cache:
+  enabled: true
+  l1:
+    max_entries: 5000
+    max_entry_size_kb: 64
+
+observability:
+  log_args: true
+  log_responses: false
+  redact_fields: ["password", "api_key", "token", "secret"]
+  retention_days: 7
+  db_path: "/data/conduit-logs.db"
+
+metrics:
+  enabled: true
+  port: 9090

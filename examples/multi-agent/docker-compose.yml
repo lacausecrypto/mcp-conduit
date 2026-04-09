@@ -1,0 +1,54 @@
+version: "3.8"
+
+services:
+  gateway:
+    build: ../..
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    volumes:
+      - ./conduit.config.yml:/etc/conduit/config.yml:ro
+      - conduit-data:/data
+    environment:
+      - CONDUIT_CONFIG=/etc/conduit/config.yml
+      - CONDUIT_ADMIN_KEY=admin-secret
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/conduit/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      - salesforce-mcp
+      - github-mcp
+      - slack-mcp
+
+  # Mock Salesforce MCP server
+  salesforce-mcp:
+    image: node:22-alpine
+    command: sh -c "echo 'Mock Salesforce MCP — replace with real server' && sleep infinity"
+    expose:
+      - "3001"
+    environment:
+      - PORT=3001
+
+  # Mock GitHub MCP server
+  github-mcp:
+    image: node:22-alpine
+    command: sh -c "echo 'Mock GitHub MCP — replace with real server' && sleep infinity"
+    expose:
+      - "3002"
+    environment:
+      - PORT=3002
+
+  # Mock Slack MCP server
+  slack-mcp:
+    image: node:22-alpine
+    command: sh -c "echo 'Mock Slack MCP — replace with real server' && sleep infinity"
+    expose:
+      - "3003"
+    environment:
+      - PORT=3003
+
+volumes:
+  conduit-data:

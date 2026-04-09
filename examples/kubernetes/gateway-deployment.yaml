@@ -1,0 +1,106 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: conduit
+  namespace: nexus
+  labels:
+    app: conduit
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: conduit
+  template:
+    metadata:
+      labels:
+        app: conduit
+    spec:
+      serviceAccountName: conduit
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      containers:
+        - name: conduit
+          image: nexusgateway/conduit:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: metrics
+              containerPort: 9090
+          env:
+            - name: CONDUIT_CONFIG
+              value: /etc/conduit/conduit.config.yml
+            - name: CONDUIT_DB_PATH
+              value: /data/conduit-logs.db
+            - name: CONDUIT_ADMIN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: conduit-secrets
+                  key: admin-key
+            - name: NODE_ENV
+              value: production
+          livenessProbe:
+            httpGet:
+              path: /conduit/health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /conduit/readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/nexus
+              readOnly: true
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+      volumes:
+        - name: config
+          configMap:
+            name: conduit-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: conduit-data
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: conduit
+  namespace: nexus
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: conduit-data
+  namespace: nexus
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi

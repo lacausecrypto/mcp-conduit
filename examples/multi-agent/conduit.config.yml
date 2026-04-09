@@ -1,0 +1,102 @@
+# examples/multi-agent/conduit.config.yml
+#
+# Three backend servers, API-key auth, per-agent ACL policies,
+# per-agent rate limits, and differentiated cache TTLs.
+
+gateway:
+  port: 8080
+  host: "0.0.0.0"
+
+router:
+  namespace_strategy: prefix   # salesforce.get_contact, github.list_repos, etc.
+  health_check:
+    enabled: true
+    interval_seconds: 30
+    timeout_ms: 5000
+    unhealthy_threshold: 3
+
+servers:
+  - id: salesforce
+    url: "http://salesforce-mcp:3001/mcp"
+    cache:
+      default_ttl: 300
+      overrides:
+        get_contact:
+          ttl: 600
+        create_lead:
+          ttl: 0
+          invalidates: ["get_contact", "search_leads"]
+
+  - id: github
+    url: "http://github-mcp:3002/mcp"
+    cache:
+      default_ttl: 120
+      overrides:
+        list_repos:
+          ttl: 300
+        create_issue:
+          ttl: 0
+
+  - id: slack
+    url: "http://slack-mcp:3003/mcp"
+    cache:
+      default_ttl: 30       # Slack data changes frequently
+
+cache:
+  enabled: true
+  l1:
+    max_entries: 20000
+    max_entry_size_kb: 128
+
+# API-key authentication
+auth:
+  method: api_key
+  api_keys:
+    - "support-agent-key-abc123"
+    - "sales-agent-key-def456"
+    - "admin-agent-key-xyz789"
+
+# ACL: each agent gets different access
+acl:
+  enabled: true
+  default_action: deny
+
+  policies:
+    - name: support-agent-access
+      clients: ["support-agent-key-abc123"]
+      servers: ["salesforce", "slack"]
+      tools: ["*"]
+      action: allow
+
+    - name: sales-agent-access
+      clients: ["sales-agent-key-def456"]
+      servers: ["salesforce", "github"]
+      tools: ["salesforce.get_contact", "salesforce.search_leads", "salesforce.create_lead",
+               "github.list_repos", "github.get_repo"]
+      action: allow
+
+    - name: admin-full-access
+      clients: ["admin-agent-key-xyz789"]
+      servers: ["*"]
+      tools: ["*"]
+      action: allow
+
+# Rate limits — prevent any single agent from overwhelming backends
+rate_limits:
+  enabled: true
+  backend: memory
+  global:
+    requests_per_minute: 1000
+  per_client:
+    requests_per_minute: 200
+
+observability:
+  log_args: true
+  log_responses: false
+  redact_fields: ["password", "api_key", "token", "secret", "authorization", "ssn"]
+  retention_days: 30
+  db_path: "/data/conduit-logs.db"
+
+metrics:
+  enabled: true
+  port: 9090

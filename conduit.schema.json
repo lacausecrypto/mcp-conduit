@@ -1,0 +1,301 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/lacausecrypto/mcp-conduit/blob/main/conduit.schema.json",
+  "title": "MCP Conduit Configuration",
+  "description": "Configuration schema for MCP Conduit gateway. Docs: https://github.com/lacausecrypto/mcp-conduit/blob/main/docs/CONFIGURATION.md",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "gateway": {
+      "type": "object",
+      "description": "HTTP server settings",
+      "properties": {
+        "port": { "type": "integer", "default": 8080, "minimum": 1, "maximum": 65535, "description": "Listening port" },
+        "host": { "type": "string", "default": "0.0.0.0", "description": "Bind address" },
+        "tls": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "cert_path": { "type": "string", "description": "Path to PEM certificate" },
+            "key_path": { "type": "string", "description": "Path to PEM private key" },
+            "ca_path": { "type": "string", "description": "Optional CA bundle for mTLS" },
+            "min_version": { "type": "string", "enum": ["TLSv1.2", "TLSv1.3"], "default": "TLSv1.2" }
+          }
+        }
+      }
+    },
+    "router": {
+      "type": "object",
+      "description": "Routing and load balancing",
+      "properties": {
+        "namespace_strategy": { "type": "string", "enum": ["prefix", "none"], "default": "prefix", "description": "Tool naming strategy across servers" },
+        "load_balancing": { "type": "string", "enum": ["round-robin", "least-connections"], "default": "round-robin" },
+        "health_check": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "interval_seconds": { "type": "integer", "default": 30, "minimum": 1 },
+            "timeout_ms": { "type": "integer", "default": 5000, "minimum": 100 },
+            "unhealthy_threshold": { "type": "integer", "default": 3, "minimum": 1 },
+            "healthy_threshold": { "type": "integer", "default": 1, "minimum": 1 }
+          }
+        },
+        "circuit_breaker": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "failure_threshold": { "type": "integer", "default": 5, "minimum": 1 },
+            "reset_timeout_ms": { "type": "integer", "default": 30000, "minimum": 1000 },
+            "half_open_max_requests": { "type": "integer", "default": 1, "minimum": 1 },
+            "success_threshold": { "type": "integer", "default": 2, "minimum": 1 }
+          }
+        }
+      }
+    },
+    "servers": {
+      "type": "array",
+      "description": "MCP backend servers",
+      "items": {
+        "type": "object",
+        "required": ["id", "cache"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-zA-Z0-9-]+$", "description": "Unique server identifier" },
+          "url": { "type": "string", "description": "Server URL (HTTP) or identifier (stdio)" },
+          "transport": { "type": "string", "enum": ["http", "stdio"], "default": "http" },
+          "command": { "type": "string", "description": "Command to execute (stdio transport)" },
+          "args": { "type": "array", "items": { "type": "string" }, "description": "Command arguments (stdio)" },
+          "env": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Environment variables (stdio)" },
+          "replicas": { "type": "array", "items": { "type": "string", "format": "uri" }, "description": "Additional replica URLs (HTTP only)" },
+          "timeout_ms": { "type": "integer", "default": 30000, "minimum": 100 },
+          "cache": {
+            "type": "object",
+            "required": ["default_ttl"],
+            "properties": {
+              "default_ttl": { "type": "integer", "minimum": 0, "description": "Default cache TTL in seconds (0=disabled)" },
+              "overrides": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "object",
+                  "properties": {
+                    "ttl": { "type": "integer", "minimum": 0 },
+                    "ignore_args": { "type": "array", "items": { "type": "string" } },
+                    "invalidates": { "type": "array", "items": { "type": "string" } }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "cache": {
+      "type": "object",
+      "description": "Caching configuration (L1 in-memory + optional L2 Redis)",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "l1": {
+          "type": "object",
+          "properties": {
+            "max_entries": { "type": "integer", "default": 10000, "minimum": 1 },
+            "max_entry_size_kb": { "type": "integer", "default": 64, "minimum": 1 }
+          }
+        },
+        "l2": {
+          "type": "object",
+          "description": "Distributed Redis L2 cache",
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "redis_url": { "type": "string", "format": "uri", "description": "Redis connection URL" },
+            "default_ttl_multiplier": { "type": "number", "default": 3, "minimum": 1 },
+            "key_prefix": { "type": "string", "default": "conduit:cache:" },
+            "max_entry_size_kb": { "type": "integer", "default": 512, "minimum": 1 }
+          }
+        }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "description": "Authentication configuration",
+      "properties": {
+        "method": { "type": "string", "enum": ["none", "jwt", "api_key"], "default": "none" },
+        "jwks_url": { "type": "string", "format": "uri", "description": "JWKS endpoint URL (jwt method)" },
+        "jwt_audience": { "type": "string", "description": "Expected JWT audience claim" },
+        "jwt_issuer": { "type": "string", "description": "Expected JWT issuer claim" },
+        "api_keys": { "type": "array", "items": { "type": "string" }, "description": "Valid API keys (api_key method)" }
+      }
+    },
+    "acl": {
+      "type": "object",
+      "description": "Access control policies",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "default_action": { "type": "string", "enum": ["allow", "deny"], "default": "allow" },
+        "policies": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "action", "clients", "servers", "tools"],
+            "properties": {
+              "name": { "type": "string" },
+              "action": { "type": "string", "enum": ["allow", "deny"] },
+              "clients": { "type": "array", "items": { "type": "string" } },
+              "servers": { "type": "array", "items": { "type": "string" } },
+              "tools": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        }
+      }
+    },
+    "rate_limits": {
+      "type": "object",
+      "description": "Rate limiting configuration",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "backend": { "type": "string", "enum": ["memory", "redis"], "default": "memory" },
+        "redis_url": { "type": "string", "format": "uri" },
+        "global": {
+          "type": "object",
+          "properties": {
+            "requests": { "type": "integer", "minimum": 1 },
+            "window_seconds": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "per_client": {
+          "type": "object",
+          "properties": {
+            "requests": { "type": "integer", "minimum": 1 },
+            "window_seconds": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "queue": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "max_wait_ms": { "type": "integer", "default": 5000, "minimum": 100 },
+            "max_queue_size": { "type": "integer", "default": 100, "minimum": 1 }
+          }
+        }
+      }
+    },
+    "guardrails": {
+      "type": "object",
+      "description": "AI guardrails — rule-based tool call inspection",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "default_action": { "type": "string", "enum": ["allow", "block"], "default": "allow" },
+        "rules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "action"],
+            "properties": {
+              "name": { "type": "string", "description": "Unique rule name" },
+              "tools": { "type": "array", "items": { "type": "string" }, "description": "Tool name patterns (wildcards: delete_*, *)" },
+              "clients": { "type": "array", "items": { "type": "string" } },
+              "servers": { "type": "array", "items": { "type": "string" } },
+              "bypass": { "type": "boolean", "description": "If true, skip all guardrails for matching clients" },
+              "conditions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["field", "operator"],
+                  "properties": {
+                    "field": { "type": "string", "description": "Dot-path in tool arguments (e.g. 'batch_size')" },
+                    "operator": { "type": "string", "enum": ["eq", "neq", "gt", "gte", "lt", "lte", "contains", "not_contains", "matches", "exists", "not_exists"] },
+                    "value": { "description": "Comparison value (not required for exists/not_exists)" }
+                  }
+                }
+              },
+              "action": { "type": "string", "enum": ["block", "alert", "require_approval", "transform"] },
+              "message": { "type": "string", "description": "Message returned on block" },
+              "severity": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+              "webhook": { "type": "string", "format": "uri", "description": "Webhook URL for alerts" }
+            }
+          }
+        }
+      }
+    },
+    "tenant_isolation": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "header": { "type": "string", "default": "Authorization", "description": "HTTP header containing tenant identifier" }
+      }
+    },
+    "observability": {
+      "type": "object",
+      "description": "Logging, tracing, and redaction",
+      "properties": {
+        "log_args": { "type": "boolean", "default": true },
+        "log_responses": { "type": "boolean", "default": false },
+        "redact_fields": { "type": "array", "items": { "type": "string" }, "default": ["password", "token", "secret", "api_key", "authorization"] },
+        "retention_days": { "type": "integer", "default": 30, "minimum": 1 },
+        "db_path": { "type": "string", "default": "./conduit-logs.db" },
+        "opentelemetry": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "endpoint": { "type": "string", "format": "uri", "description": "OTLP HTTP endpoint" },
+            "service_name": { "type": "string", "default": "mcp-conduit" },
+            "sample_rate": { "type": "number", "default": 1.0, "minimum": 0, "maximum": 1 }
+          }
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "port": { "type": "integer", "default": 9090, "minimum": 1, "maximum": 65535 }
+      }
+    },
+    "admin": {
+      "type": "object",
+      "properties": {
+        "key": { "type": "string", "description": "Bearer token for admin API protection" }
+      }
+    },
+    "plugins": {
+      "type": "array",
+      "description": "Plugin/middleware configuration",
+      "items": {
+        "type": "object",
+        "required": ["name", "path", "hooks"],
+        "properties": {
+          "name": { "type": "string" },
+          "path": { "type": "string", "description": "File path or npm package" },
+          "hooks": { "type": "array", "items": { "type": "string", "enum": ["before:request", "after:auth", "before:cache", "after:upstream", "before:response"] } },
+          "config": { "type": "object", "additionalProperties": true }
+        }
+      }
+    },
+    "discovery": {
+      "type": "object",
+      "description": "Service discovery for auto-registering MCP servers",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "poll_interval_seconds": { "type": "integer", "default": 30, "minimum": 5 },
+        "stale_timeout_seconds": { "type": "integer", "default": 90, "minimum": 10 },
+        "default_cache": {
+          "type": "object",
+          "properties": {
+            "default_ttl": { "type": "integer", "default": 60, "minimum": 0 }
+          }
+        },
+        "backends": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["type"],
+            "properties": {
+              "type": { "type": "string", "enum": ["http", "dns", "consul"] },
+              "domain": { "type": "string", "description": "DNS SRV domain" },
+              "consul_url": { "type": "string", "format": "uri" },
+              "service_name": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

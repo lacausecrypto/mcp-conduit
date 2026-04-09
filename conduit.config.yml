@@ -1,0 +1,379 @@
+# yaml-language-server: $schema=conduit.schema.json
+# ==============================================================
+# MCP Conduit — Configuration
+# ==============================================================
+#
+# WARNING: DO NOT commit this file with real secrets.
+#          Use environment variables instead.
+#          Copy .env.example to .env and add .env to .gitignore.
+#
+# Full documentation:
+#   - Getting started     : README.md
+#   - Configuration ref   : docs/CONFIGURATION.md
+#   - Security guide      : docs/SECURITY_GUIDE.md
+#   - API reference       : docs/API_REFERENCE.md
+#
+# Environment variables (take precedence over this file):
+#   CONDUIT_PORT, CONDUIT_HOST, CONDUIT_ADMIN_KEY, CONDUIT_DB_PATH,
+#   CONDUIT_METRICS_PORT, CONDUIT_TLS_ENABLED, CONDUIT_TLS_CERT,
+#   CONDUIT_TLS_KEY, CONDUIT_REDIS_URL, CONDUIT_LOG_ARGS
+# ==============================================================
+
+
+# -------------------------------------------------------------
+# GATEWAY — HTTP server
+# Main listening port and network configuration.
+# -------------------------------------------------------------
+gateway:
+  port: 8080          # TCP port. Override: CONDUIT_PORT
+  host: "0.0.0.0"    # "0.0.0.0" = all interfaces. Override: CONDUIT_HOST
+
+  # Native TLS (optional)
+  # If you use a reverse proxy (nginx, Caddy, Traefik) in front,
+  # leave this section commented out — the proxy handles HTTPS for you.
+  # Security: TLSv1.2 minimum. Overrides: CONDUIT_TLS_ENABLED, CONDUIT_TLS_CERT, CONDUIT_TLS_KEY
+  # tls:
+  #   enabled: true
+  #   cert_path: "/etc/letsencrypt/live/mydomain.com/fullchain.pem"
+  #   key_path: "/etc/letsencrypt/live/mydomain.com/privkey.pem"
+  #   # ca_path: "/etc/ssl/ca-bundle.pem"   # Optional: mTLS (mutual TLS)
+  #   min_version: "TLSv1.2"               # "TLSv1.2" or "TLSv1.3"
+
+
+# -------------------------------------------------------------
+# ROUTER
+# Routing behavior toward upstream MCP servers.
+# -------------------------------------------------------------
+router:
+  # Tool naming strategy exposed to clients:
+  #   "prefix" -> salesforce.get_contact, github.list_repos
+  #              (recommended when you have multiple servers)
+  #   "none"   -> get_contact, list_repos
+  #              (startup error if two servers share the same tool name)
+  namespace_strategy: prefix    # "prefix" | "none"
+
+  # Load balancing strategy between replicas of the same server:
+  #   "round-robin"       -> requests rotate across replicas (default)
+  #   "least-connections" -> requests go to the least loaded replica
+  # load_balancing: round-robin
+
+  # Periodic health checks of backend servers
+  health_check:
+    enabled: true
+    interval_seconds: 30    # Check frequency in seconds
+    timeout_ms: 5000         # Timeout per check in milliseconds
+    unhealthy_threshold: 3   # Consecutive failures -> backend marked unhealthy
+    healthy_threshold: 1     # Consecutive successes -> backend marked healthy
+
+  # Circuit breaker (disabled by default)
+  # Protects your backends against overload during repeated errors.
+  # Security: enable in production to prevent cascading failures.
+  # circuit_breaker:
+  #   enabled: true
+  #   failure_threshold: 5      # Failures -> circuit opens
+  #   reset_timeout_ms: 30000   # Duration in open state (ms) before half-open test
+  #   half_open_max_requests: 1 # Test requests allowed in half-open state
+  #   success_threshold: 2      # Successes to close the circuit again
+
+
+# -------------------------------------------------------------
+# UPSTREAM MCP SERVERS
+# Add as many servers as needed.
+# Each server must have a unique identifier.
+# -------------------------------------------------------------
+servers:
+  # --- HTTP transport example ---
+  - id: salesforce         # Unique ID — used in URLs and logs
+    url: "http://localhost:3001/mcp"    # MCP endpoint URL
+    # transport: http                   # Default: "http" (can be omitted)
+    # timeout_ms: 30000                # Timeout in ms (default: 30000)
+    # replicas:                        # Replicas for load balancing
+    #   - "http://sf-replica:3001/mcp"
+
+    # Cache settings for this server
+    cache:
+      default_ttl: 300    # Default cache duration: 300 seconds (5 minutes)
+                          # 0 = disable caching for this server
+
+      # Per-tool overrides (optional)
+      # Take precedence over MCP annotations and default_ttl.
+      overrides:
+        get_contact:
+          ttl: 600         # get_contact: cache for 10 minutes
+        create_lead:
+          ttl: 0           # create_lead: never cache (write operation)
+          invalidates:     # ...and invalidate these tools when called
+            - get_contact
+            - search_leads
+        get_report:
+          ttl: 300
+          ignore_args:     # Arguments excluded from the cache key
+            - timestamp    # Non-deterministic field (ignored for cache key)
+            - request_id   # Request ID (does not change the result)
+
+  # --- stdio transport example ---
+  # Launches the MCP server as a child process communicating via stdin/stdout.
+  # - id: local-tools
+  #   transport: stdio
+  #   command: "node"                    # Command to execute (required for stdio)
+  #   args: ["./mcp-server/index.js"]    # Command arguments
+  #   env:                               # Additional environment variables
+  #     NODE_ENV: "production"
+  #     API_KEY: "${LOCAL_TOOLS_API_KEY}" # Inject from environment
+  #   url: "stdio://local-tools"         # Identifier (not a real URL for stdio)
+  #   cache:
+  #     default_ttl: 120
+
+  - id: github
+    url: "http://localhost:3002/mcp"
+    cache:
+      default_ttl: 120     # Cache for 2 minutes
+
+
+# -------------------------------------------------------------
+# CACHE
+# L1 in-memory cache (LRU) shared across all servers.
+# L2 distributed Redis cache (optional, for multi-instance deployments).
+# -------------------------------------------------------------
+cache:
+  enabled: true
+  l1:
+    max_entries: 10000       # Maximum entries (LRU eviction beyond this)
+    max_entry_size_kb: 64    # Entries > 64 KB are not cached
+
+  # L2 distributed Redis cache (optional)
+  # Provides a shared cache layer across multiple gateway instances.
+  # l2:
+  #   enabled: true
+  #   redis_url: "redis://localhost:6379"   # Override: CONDUIT_REDIS_URL
+  #   default_ttl_multiplier: 3             # L2 TTL = L1 TTL x multiplier (default: 3)
+  #   key_prefix: "conduit:cache:"            # Redis key prefix (default: "conduit:cache:")
+  #   max_entry_size_kb: 512                # Max entry size in KB (default: 512)
+
+
+# -------------------------------------------------------------
+# AUTHENTICATION
+# Security: "none" must not be used in production.
+# Choose "jwt" (recommended) or "api-key".
+# -------------------------------------------------------------
+# auth:
+#   method: api-key    # "jwt", "api-key", or "none"
+#
+#   # JWT mode — your identity provider (Auth0, Keycloak, Okta, etc.)
+#   # jwks_url: "https://your-idp.example.com/.well-known/jwks.json"
+#   # issuer: "https://your-idp.example.com/"
+#   # audience: "conduit"
+#   # tenant_claim: "org_id"   # JWT claim -> tenant_id
+#   # client_claim: "sub"       # JWT claim -> client_id (for ACL and logs)
+#
+#   # API key mode
+#   # WARNING: Inject keys from environment variables or a secret manager
+#   api_keys:
+#     - key: "sk-agent-prod-REPLACE-THIS-VALUE"
+#       client_id: "agent-production"
+#       tenant_id: "my-organization"
+
+auth:
+  method: api-key
+  api_keys:
+    - key: "sk-agent-dev-change-me-in-production"
+      client_id: "dev-agent"
+      tenant_id: "dev-org"
+
+
+# -------------------------------------------------------------
+# ACL — ACCESS CONTROL
+# Security: enable in production with default_action: deny.
+# Requires auth.method != "none".
+# -------------------------------------------------------------
+# acl:
+#   enabled: true
+#   default_action: deny     # "allow" or "deny" if no policy matches
+#                             # "deny" is more secure (whitelist approach)
+#   policies:
+#     # Support agents: read-only access
+#     - name: "support-readonly"
+#       clients: ["agent-support-*"]   # Wildcards supported
+#       allow:
+#         - server: "*"
+#           tools: ["get_*", "search_*", "list_*"]
+#       deny:
+#         - server: "*"
+#           tools: ["create_*", "delete_*", "update_*"]
+#
+#     # Admin agents: full access
+#     - name: "admin-full-access"
+#       clients: ["agent-admin"]
+#       allow:
+#         - server: "*"
+#           tools: ["*"]
+
+
+# -------------------------------------------------------------
+# RATE LIMITING
+# Security: enable in production to prevent abuse.
+# "redis" backend required for multi-instance deployments (Kubernetes HPA).
+# -------------------------------------------------------------
+rate_limits:
+  enabled: true
+  backend: memory    # "memory" (single instance) or "redis" (distributed)
+  # redis_url: "redis://redis:6379"   # Required if backend: redis. Override: CONDUIT_REDIS_URL
+
+  # Global limit (all clients combined)
+  global:
+    requests_per_minute: 1000
+    requests_per_hour: 20000
+
+  # Per-client limit (per authenticated client_id)
+  per_client:
+    requests_per_minute: 60
+    requests_per_hour: 1000
+    requests_per_day: 10000
+
+  # Per-server/tool overrides
+  overrides:
+    - server: salesforce
+      per_tool:
+        create_contact:
+          requests_per_minute: 10   # Expensive tool: strict limit
+
+  # Wait queue (instead of rejecting immediately)
+  queue:
+    enabled: true
+    max_wait_ms: 5000      # Maximum wait time before rejection
+    max_queue_size: 50     # Maximum queue size
+
+
+# -------------------------------------------------------------
+# TENANT ISOLATION
+# Segments cache and logs by tenant.
+# -------------------------------------------------------------
+tenant_isolation:
+  enabled: true
+  # HTTP header containing the tenant identifier.
+  # With JWT auth, the tenant comes from the claim defined in auth.tenant_claim.
+  header: "Authorization"
+
+
+# -------------------------------------------------------------
+# GUARDRAILS
+# Inspect tool calls (name + arguments) and can block, alert,
+# require approval, or transform arguments.
+# Rules are evaluated in order — first match wins.
+# -------------------------------------------------------------
+guardrails:
+  enabled: true
+  default_action: allow    # "allow" or "block" if no rule matches
+
+  rules:
+    # Rule 1: Block destructive tools unless the client confirms
+    - name: "block-delete-without-confirmation"
+      tools: ["delete_*", "remove_*", "drop_*"]
+      action: block
+      message: "Destructive operations require explicit confirmation. Please confirm before proceeding."
+      severity: high
+      # webhook: "https://hooks.slack.com/services/T00/B00/XXXXX"   # Optional: Slack alert
+
+    # Rule 2: Alert when batch_size exceeds a threshold
+    - name: "alert-large-batch"
+      tools: ["*"]
+      conditions:
+        - field: "batch_size"
+          operator: gt
+          value: 100
+      action: alert
+      message: "Large batch size detected (>100). Monitoring for potential abuse."
+      severity: medium
+
+    # Rule 3: Bypass all guardrails for admin clients
+    - name: "admin-bypass"
+      clients: ["agent-admin", "agent-superadmin"]
+      bypass: true
+      action: block    # Action is irrelevant when bypass is true
+
+
+# -------------------------------------------------------------
+# OBSERVABILITY — LOGS AND TRACES
+# Security: configure redact_fields to mask
+# sensitive data in SQLite logs.
+# -------------------------------------------------------------
+observability:
+  log_args: true           # Log tool arguments. Override: CONDUIT_LOG_ARGS
+  log_responses: false     # Log responses (disabled: very verbose)
+
+  # Fields masked in logs (replaced with "[REDACTED]")
+  # Case-insensitive comparison, recursive in nested objects.
+  # Add your business-specific sensitive fields here.
+  redact_fields: ["ssn", "password", "api_key", "token", "secret", "authorization"]
+
+  retention_days: 30       # SQLite logs kept for 30 days, then auto-deleted
+
+  # SQLite database path. Override: CONDUIT_DB_PATH
+  # In production Docker/K8s: mount a persistent volume here.
+  db_path: "./conduit-logs.db"
+
+  # OpenTelemetry distributed tracing (optional)
+  # opentelemetry:
+  #   enabled: true
+  #   endpoint: "http://otel-collector:4318/v1/traces"   # OTLP HTTP endpoint
+  #   service_name: "conduit"                       # Service name in traces
+  #   sample_rate: 1.0                                    # Sampling rate (0.0 - 1.0)
+
+
+# -------------------------------------------------------------
+# PROMETHEUS METRICS
+# Exposed on the dedicated port AND on /conduit/metrics (main port).
+# -------------------------------------------------------------
+metrics:
+  enabled: true
+  port: 9090    # Override: CONDUIT_METRICS_PORT
+
+
+# -------------------------------------------------------------
+# ADMIN API
+# Security: always define a key in production.
+#   Prefer the CONDUIT_ADMIN_KEY variable (avoids secrets in YAML).
+#   The key protects all /conduit/* except /conduit/health and /conduit/dashboard.
+# -------------------------------------------------------------
+# admin:
+#   key: ""    # Override (recommended): CONDUIT_ADMIN_KEY
+
+
+# -------------------------------------------------------------
+# PLUGINS
+# Extend the gateway pipeline with custom middleware.
+# Plugins hook into: before:request, after:auth, before:cache,
+#   after:upstream, before:response.
+# -------------------------------------------------------------
+# plugins:
+#   - name: "audit-logger"
+#     path: "./plugins/audit-logger.js"    # Path to the JS/TS plugin file
+#     hooks:                                # Hooks to activate for this plugin
+#       - "after:auth"
+#       - "before:response"
+#     config:                               # Plugin-specific configuration (optional)
+#       log_level: "info"
+#       output_file: "/var/log/conduit-audit.log"
+
+
+# -------------------------------------------------------------
+# SERVICE DISCOVERY
+# Allows MCP servers to self-register or be discovered
+# automatically via HTTP heartbeat or DNS SRV records.
+# -------------------------------------------------------------
+# discovery:
+#   enabled: true
+#   poll_interval_seconds: 30    # How often to poll discovery backends (seconds)
+#   stale_timeout_seconds: 90    # Remove servers with no heartbeat after this delay
+#   default_cache:               # Default cache config for discovered servers
+#     default_ttl: 120
+#
+#   backends:
+#     # HTTP self-registration backend
+#     # MCP servers POST to /conduit/discover/register as a heartbeat.
+#     - type: http
+#
+#     # DNS SRV backend
+#     # Discovers servers via DNS SRV records (e.g., _mcp._tcp.services.local)
+#     - type: dns
+#       domain: "_mcp._tcp.services.local"

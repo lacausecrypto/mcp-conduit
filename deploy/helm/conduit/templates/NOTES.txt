@@ -1,0 +1,42 @@
+MCP Nexus Gateway has been deployed!
+
+Get the gateway URL:
+{{- if .Values.ingress.enabled }}
+  http{{ if .Values.ingress.tls }}s{{ end }}://{{ (first .Values.ingress.hosts).host }}/mcp/<server-id>
+{{- else if contains "NodePort" .Values.service.type }}
+  export NODE_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ include "nexus-gateway.fullname" . }})
+  export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
+  echo "Gateway: http://$NODE_IP:$NODE_PORT"
+{{- else if contains "LoadBalancer" .Values.service.type }}
+  NOTE: It may take a few minutes for the LoadBalancer IP to become available.
+  kubectl get svc --namespace {{ .Release.Namespace }} {{ include "nexus-gateway.fullname" . }} --watch
+{{- else }}
+  kubectl port-forward --namespace {{ .Release.Namespace }} svc/{{ include "nexus-gateway.fullname" . }} 8080:{{ .Values.service.port }}
+  echo "Gateway: http://127.0.0.1:8080"
+{{- end }}
+
+Health check:
+  curl http://<gateway-url>/nexus/health
+
+Admin API:
+{{- if .Values.gateway.adminKey }}
+  curl -H "Authorization: Bearer <admin-key>" http://<gateway-url>/nexus/stats
+{{- else }}
+  WARNING: No admin key set! Set gateway.adminKey for production deployments.
+  curl http://<gateway-url>/nexus/stats
+{{- end }}
+
+Hot-reload config (no restart needed):
+  # After updating the ConfigMap, trigger a reload via SIGHUP:
+  kubectl exec -n {{ .Release.Namespace }} deployment/{{ include "nexus-gateway.fullname" . }} -- kill -HUP 1
+
+  # Or via the admin API:
+  curl -X POST http://<gateway-url>/nexus/config/reload
+
+Metrics (Prometheus):
+{{- if .Values.metrics.enabled }}
+  kubectl port-forward --namespace {{ .Release.Namespace }} svc/{{ include "nexus-gateway.fullname" . }} 9090:{{ .Values.service.metricsPort }}
+  curl http://127.0.0.1:9090/
+{{- else }}
+  Metrics are disabled. Set metrics.enabled=true to enable Prometheus scraping.
+{{- end }}

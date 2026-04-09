@@ -1,0 +1,50 @@
+# examples/claude-desktop/conduit.config.yml
+#
+# Single gateway for Claude Desktop — aggregates multiple MCP servers
+# behind one endpoint. Claude Desktop connects once; the gateway handles
+# routing, caching, and observability.
+
+gateway:
+  port: 8080
+  host: "127.0.0.1"   # localhost only — Claude Desktop is on the same machine
+
+router:
+  namespace_strategy: prefix   # tools appear as "salesforce.get_contact", etc.
+  health_check:
+    enabled: true
+    interval_seconds: 60
+    timeout_ms: 5000
+    unhealthy_threshold: 3
+
+servers:
+  - id: salesforce
+    url: "http://localhost:3001/mcp"
+    cache:
+      default_ttl: 300
+
+  - id: github
+    url: "http://localhost:3002/mcp"
+    cache:
+      default_ttl: 120
+
+  - id: filesystem
+    url: "http://localhost:3003/mcp"
+    cache:
+      default_ttl: 10        # File metadata can change quickly
+
+cache:
+  enabled: true
+  l1:
+    max_entries: 5000
+    max_entry_size_kb: 128
+
+observability:
+  log_args: true
+  log_responses: false
+  redact_fields: ["password", "api_key", "token", "secret"]
+  retention_days: 7
+  db_path: "./conduit-logs.db"
+
+metrics:
+  enabled: false      # Not needed for local Claude Desktop use
+  port: 9090

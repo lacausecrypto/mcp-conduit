@@ -1,0 +1,132 @@
+replicaCount: 1
+
+image:
+  repository: nexusgateway/conduit
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1001
+  fsGroup: 1001
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  type: ClusterIP
+  port: 8080
+  metricsPort: 9090
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: nexus.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# ── Gateway config ────────────────────────────────────────────────────────────
+
+gateway:
+  port: 8080
+  host: "0.0.0.0"
+
+  # Admin API bearer token. Set via --set gateway.adminKey=... or a secret.
+  # If empty, the admin API is unprotected (not recommended for production).
+  adminKey: ""
+
+  # Use an existing Kubernetes Secret instead of creating one from values.
+  # The secret must have keys: admin-key (and optionally api-keys).
+  existingSecret: ""
+
+auth:
+  method: "none"
+  # For api_key auth, list keys here (will be stored in a Secret):
+  apiKeys: []
+  # For jwt auth:
+  # jwksUrl: "https://your-idp/.well-known/jwks.json"
+
+# Backend MCP servers — each entry becomes a server block in the config
+servers: []
+  # - id: salesforce
+  #   url: "http://salesforce-mcp:3001/mcp"
+  #   cacheTtl: 300
+  # - id: github
+  #   url: "http://github-mcp:3002/mcp"
+  #   cacheTtl: 120
+
+cache:
+  enabled: true
+  l1:
+    maxEntries: 10000
+    maxEntrySizeKb: 64
+
+observability:
+  logArgs: true
+  logResponses: false
+  redactFields:
+    - ssn
+    - password
+    - api_key
+    - token
+    - secret
+    - authorization
+  retentionDays: 30
+
+metrics:
+  enabled: true
+  port: 9090
+
+redis:
+  enabled: false
+  url: "redis://redis:6379"
+
+persistence:
+  enabled: true
+  size: 1Gi
+  storageClass: ""
+  accessMode: ReadWriteOnce
+
+# Prometheus ServiceMonitor (requires prometheus-operator)
+serviceMonitor:
+  enabled: false
+  namespace: ""
+  interval: 30s
+  scrapeTimeout: 10s
+  labels: {}

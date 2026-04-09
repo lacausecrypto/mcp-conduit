@@ -1,0 +1,67 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "conduit.fullname" . }}
+  labels:
+    {{- include "conduit.labels" . | nindent 4 }}
+data:
+  conduit.config.yml: |
+    gateway:
+      port: {{ .Values.gateway.port }}
+      host: {{ .Values.gateway.host | quote }}
+
+    router:
+      namespace_strategy: prefix
+      health_check:
+        enabled: true
+        interval_seconds: 30
+        timeout_ms: 5000
+        unhealthy_threshold: 3
+        healthy_threshold: 1
+
+    servers:
+    {{- range .Values.servers }}
+      - id: {{ .id | quote }}
+        url: {{ .url | quote }}
+        cache:
+          default_ttl: {{ default 300 .cacheTtl }}
+    {{- end }}
+
+    cache:
+      enabled: {{ .Values.cache.enabled }}
+      l1:
+        max_entries: {{ .Values.cache.l1.maxEntries }}
+        max_entry_size_kb: {{ .Values.cache.l1.maxEntrySizeKb }}
+
+    tenant_isolation:
+      enabled: false
+      header: Authorization
+
+    observability:
+      log_args: {{ .Values.observability.logArgs }}
+      log_responses: {{ .Values.observability.logResponses }}
+      redact_fields:
+      {{- range .Values.observability.redactFields }}
+        - {{ . | quote }}
+      {{- end }}
+      retention_days: {{ .Values.observability.retentionDays }}
+      db_path: /data/conduit-logs.db
+
+    metrics:
+      enabled: {{ .Values.metrics.enabled }}
+      port: {{ .Values.metrics.port }}
+
+    {{- if .Values.auth }}
+    auth:
+      method: {{ .Values.auth.method | quote }}
+      {{- if eq .Values.auth.method "jwt" }}
+      jwks_url: {{ .Values.auth.jwksUrl | quote }}
+      {{- end }}
+    {{- end }}
+
+    {{- if .Values.redis.enabled }}
+    rate_limits:
+      enabled: true
+      backend: redis
+      redis_url: {{ .Values.redis.url | quote }}
+    {{- end }}
