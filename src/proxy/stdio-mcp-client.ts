@@ -178,9 +178,15 @@ export class StdioMcpClient implements IMcpClient {
       );
     }
 
+    // On Windows, commands like 'npx' are actually 'npx.cmd' batch files.
+    // spawn() can't resolve them without shell:true on Windows.
+    const isWindows = process.platform === 'win32';
     const proc = spawn(command, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       env,
+      shell: isWindows,
+      // Prevent shell window flash on Windows
+      ...(isWindows ? { windowsHide: true } : {}),
     });
 
     this.process = proc;
@@ -287,15 +293,25 @@ export class StdioMcpClient implements IMcpClient {
   }
 
   /**
-   * Tue le processus enfant proprement (SIGTERM → grace → SIGKILL).
+   * Kills the child process gracefully.
+   * On Unix: SIGTERM → grace period → SIGKILL
+   * On Windows: proc.kill() sends TerminateProcess (immediate)
    */
   private async killProcess(): Promise<void> {
     const proc = this.process;
     if (!proc || proc.exitCode !== null) return;
 
+    const isWindows = process.platform === 'win32';
+
     return new Promise<void>((resolve) => {
       const killTimer = setTimeout(() => {
-        try { proc.kill('SIGKILL'); } catch { /* already dead */ }
+        try {
+          if (isWindows) {
+            proc.kill(); // TerminateProcess on Windows
+          } else {
+            proc.kill('SIGKILL');
+          }
+        } catch { /* already dead */ }
         resolve();
       }, KILL_GRACE_MS);
 
@@ -304,7 +320,13 @@ export class StdioMcpClient implements IMcpClient {
         resolve();
       });
 
-      try { proc.kill('SIGTERM'); } catch { /* already dead */ }
+      try {
+        if (isWindows) {
+          proc.kill(); // No graceful signal on Windows, just terminate
+        } else {
+          proc.kill('SIGTERM');
+        }
+      } catch { /* already dead */ }
     });
   }
 }

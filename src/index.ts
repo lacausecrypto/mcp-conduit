@@ -130,9 +130,10 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
 
-  // Hot-reload on SIGHUP — re-reads the config file and applies changes that
-  // do not require a restart (ACL, rate limits, cache TTLs, observability).
-  process.on('SIGHUP', () => {
+  // Hot-reload on SIGHUP (Unix only, ignored on Windows).
+  // On Windows, use POST /conduit/config/reload instead.
+  if (process.platform !== 'win32') {
+    process.on('SIGHUP', () => {
     console.log('[Conduit] SIGHUP received, reloading config...');
     gateway.reload().then((result) => {
       if (result.reloaded.length > 0) {
@@ -149,7 +150,8 @@ async function main(): Promise<void> {
     }).catch((err: unknown) => {
       console.error('[Conduit] Unexpected error during reload:', err);
     });
-  });
+    });
+  } // end if (process.platform !== 'win32')
 
   // ── Startup summary ──────────────────────────────────────────────────────
   const authMethod = config.auth?.method ?? 'none';

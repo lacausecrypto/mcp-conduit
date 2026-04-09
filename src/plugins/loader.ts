@@ -50,11 +50,14 @@ async function loadSinglePlugin(config: PluginConfig): Promise<ConduitPlugin> {
     ? resolve(process.cwd(), config.path)
     : config.path;
 
-  // Security: block dangerous paths — prevent loading from system directories
+  // Security: block dangerous paths (Unix + Windows system directories)
   const resolved = resolve(modulePath);
-  const BLOCKED_PREFIXES = ['/etc/', '/root/', '/proc/', '/sys/', '/dev/'];
+  const BLOCKED_PREFIXES = process.platform === 'win32'
+    ? ['C:\\Windows\\', 'C:\\Program Files\\', 'C:\\ProgramData\\']
+    : ['/etc/', '/root/', '/proc/', '/sys/', '/dev/'];
+  const normalizedResolved = resolved.toLowerCase();
   for (const blocked of BLOCKED_PREFIXES) {
-    if (resolved.startsWith(blocked)) {
+    if (normalizedResolved.startsWith(blocked.toLowerCase())) {
       throw new Error(`Plugin path "${config.path}" points to a blocked system directory (${blocked})`);
     }
   }

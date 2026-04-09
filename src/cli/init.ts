@@ -76,7 +76,8 @@ export async function runInit(): Promise<void> {
 
     if (transport === 'stdio') {
       const command = await ask('Command (e.g. "npx")', 'npx');
-      const argsStr = await ask('Arguments (comma-separated)', '-y,@modelcontextprotocol/server-filesystem,/tmp');
+      const defaultDir = process.platform === 'win32' ? 'C:\\temp' : '/tmp';
+      const argsStr = await ask('Arguments (comma-separated)', `-y,@modelcontextprotocol/server-filesystem,${defaultDir}`);
       const args = argsStr.split(',').map((a) => a.trim()).filter(Boolean);
       const ttl = await ask('Cache TTL seconds (0=disabled)', '60');
 
