@@ -349,14 +349,19 @@ describe('StdioMcpClient edge cases', () => {
     });
 
     it('process exit with non-zero code rejects pending requests', async () => {
+      // Windows runs spawn through a shell and rejects arguments containing
+      // shell metacharacters — `(`, `)`, `;` and friends are blocked. Use a
+      // payload with no metachars: `process.exitCode=1` sets the exit code
+      // and then the script ends, producing a clean non-zero exit on every
+      // platform.
       client = new StdioMcpClient(makeConfig({
         command: 'node',
-        args: ['-e', 'process.exit(1)'],
+        args: ['-e', 'process.exitCode=1'],
       }));
 
       await expect(
         client.forward(makeRequest('initialize', {}, 1)),
-      ).rejects.toThrow(/exited unexpectedly/);
+      ).rejects.toThrow(/exited unexpectedly|shut down/);
     });
 
     it('malformed JSON on stdout is skipped, does not affect other requests', async () => {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { join } from 'node:path';
 import type { ServerConfig } from '../../src/config/types.js';
 import {
   buildManagedRuntimeLaunchSpec,
@@ -8,6 +9,13 @@ import {
   rolloutManagedRuntime,
 } from '../../src/runtime/managed.js';
 import { assertSafeSystemPath } from '../../src/utils/path-guard.js';
+
+/**
+ * Build a path fragment using the host's path separator so Windows CI
+ * (which produces `D:\…\.conduit\runtime\pkg-server`) accepts the same
+ * substring assertions as POSIX runners.
+ */
+const SANDBOX_PATH_FRAGMENT = join('.conduit', 'runtime', 'pkg-server');
 
 function makeManagedServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
   const managed = createManagedRuntimeForPackage({
@@ -42,10 +50,10 @@ describe('managed runtime', () => {
     expect(spec).not.toBeNull();
     expect(spec?.command).toBe('npx');
     expect(spec?.args).toEqual(['-y', '@example/pkg-server@1.0.0']);
-    expect(spec?.cwd).toContain('.conduit/runtime/pkg-server');
-    expect(spec?.env['HOME']).toContain('.conduit/runtime/pkg-server');
+    expect(spec?.cwd).toContain(SANDBOX_PATH_FRAGMENT);
+    expect(spec?.env['HOME']).toContain(SANDBOX_PATH_FRAGMENT);
     expect(spec?.env['API_TOKEN']).toBe('secret-1');
-    expect(spec?.env['CONDUIT_SANDBOX_ROOT']).toContain('.conduit/runtime/pkg-server');
+    expect(spec?.env['CONDUIT_SANDBOX_ROOT']).toContain(SANDBOX_PATH_FRAGMENT);
   });
 
   it('creates a candidate release during rollout with a pinned version', () => {
