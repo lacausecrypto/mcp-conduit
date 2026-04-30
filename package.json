@@ -1,6 +1,6 @@
 {
   "name": "mcp-conduit",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "description": "Production-grade MCP gateway with caching, guardrails, plugins, and multi-server routing",
   "type": "module",
   "license": "MIT",
@@ -70,7 +70,7 @@
     "@opentelemetry/sdk-trace-node": "^2.6.1",
     "@opentelemetry/semantic-conventions": "^1.40.0",
     "better-sqlite3": "^11.9.1",
-    "hono": "^4.7.7",
+    "hono": "^4.12.14",
     "jose": "^5.10.0",
     "js-yaml": "^4.1.0",
     "lru-cache": "^11.0.2",
@@ -86,6 +86,9 @@
     "tsx": "^4.19.3",
     "typescript": "^5.8.3",
     "vitest": "^3.1.1"
+  },
+  "overrides": {
+    "protobufjs": "^7.5.5"
   },
   "engines": {
     "node": ">=22.0.0"
