@@ -141,6 +141,17 @@ describe('StdioMcpClient', () => {
     await expect(client.openSseStream()).rejects.toThrow('SSE streams are not supported');
   });
 
+  it('treats notifications as no-response writes instead of forcing a synthetic id', async () => {
+    client = new StdioMcpClient(makeConfig());
+    const response = await client.forward({
+      body: { jsonrpc: '2.0', method: 'notifications/initialized', params: {} },
+    });
+
+    expect(response.status).toBe(202);
+    expect(response.body).toBeNull();
+    expect(response.isStream).toBe(false);
+  });
+
   it('exposes serverId and serverUrl', () => {
     client = new StdioMcpClient(makeConfig());
     expect(client.serverId).toBe('test-stdio');

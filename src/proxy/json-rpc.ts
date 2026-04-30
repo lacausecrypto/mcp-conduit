@@ -46,6 +46,36 @@ export const JSON_RPC_ERRORS = {
 } as const;
 
 /**
+ * Hard cap on the number of messages in a single JSON-RPC batch.
+ *
+ * The transport already enforces a 10 MiB body limit, but with small
+ * messages (~50 bytes) that translates to ~200k entries — each spawning a
+ * promise through the full pipeline (auth, ACL, cache, plugins, upstream).
+ * Battle-test showed 100k entries parse in ~2ms but multiplying that load
+ * across the pipeline is the actual amplification vector. 100 is well above
+ * any legitimate batch use and well below the amplification threshold.
+ */
+export const MAX_BATCH_SIZE = 100;
+
+/**
+ * Sentinel returned by parseJsonRpcStrict for batch entries that failed
+ * structural validation. The transport layer turns these into per-message
+ * Invalid Request errors so the caller can distinguish which entry broke,
+ * conformément à la spec JSON-RPC 2.0.
+ */
+export interface InvalidBatchEntry {
+  invalid: true;
+  /** ID extracted from the raw entry if present, otherwise null. */
+  id: string | number | null;
+}
+
+export function isInvalidBatchEntry(value: unknown): value is InvalidBatchEntry {
+  return typeof value === 'object'
+    && value !== null
+    && (value as Record<string, unknown>)['invalid'] === true;
+}
+
+/**
  * Valide structurellement un message JSON-RPC 2.0.
  * Supporte les requêtes, notifications et réponses.
  */
@@ -76,13 +106,23 @@ export function isJsonRpcRequest(value: JsonRpcMessage): value is JsonRpcRequest
 
 /**
  * Parse et valide un corps de requête JSON-RPC ou un tableau batch.
- * Retourne null si la valeur n'est pas un message JSON-RPC valide.
+ * Retourne null si la valeur n'est pas un message JSON-RPC valide ou si
+ * le batch dépasse MAX_BATCH_SIZE.
+ *
+ * Pour le batch : l'historique du gateway rejetait l'intégralité du batch
+ * dès qu'une entrée était invalide. Le comportement strict (ancien) reste
+ * disponible via cette fonction. Les appelants qui veulent une réponse
+ * conforme JSON-RPC 2.0 (erreur par message invalide) doivent utiliser
+ * parseJsonRpcBatchPartial ci-dessous.
  */
 export function parseJsonRpc(
   body: unknown,
 ): JsonRpcMessage | JsonRpcMessage[] | null {
   // Traitement du batch (tableau de messages)
   if (Array.isArray(body)) {
+    if (body.length === 0 || body.length > MAX_BATCH_SIZE) {
+      return null;
+    }
     const messages: JsonRpcMessage[] = [];
     for (const item of body) {
       if (!isValidJsonRpc(item)) {
@@ -90,7 +130,7 @@ export function parseJsonRpc(
       }
       messages.push(item);
     }
-    return messages.length > 0 ? messages : null;
+    return messages;
   }
 
   if (!isValidJsonRpc(body)) {
@@ -98,6 +138,33 @@ export function parseJsonRpc(
   }
 
   return body;
+}
+
+/**
+ * Permissive batch parser — returns one entry per input message: either a
+ * validated `JsonRpcMessage` or an `InvalidBatchEntry` placeholder. Lets the
+ * transport produce per-message Invalid Request errors instead of aborting
+ * the whole batch.
+ *
+ * Returns null for a non-array body or for an oversize batch (the cap still
+ * applies — without it the spec-compliant path would just amplify DoS).
+ */
+export function parseJsonRpcBatchPartial(
+  body: unknown,
+): Array<JsonRpcMessage | InvalidBatchEntry> | null {
+  if (!Array.isArray(body)) return null;
+  if (body.length === 0 || body.length > MAX_BATCH_SIZE) return null;
+
+  return body.map((item): JsonRpcMessage | InvalidBatchEntry => {
+    if (isValidJsonRpc(item)) return item;
+    // Best-effort id extraction so the client can correlate the error.
+    let id: string | number | null = null;
+    if (item && typeof item === 'object' && !Array.isArray(item)) {
+      const raw = (item as Record<string, unknown>)['id'];
+      if (typeof raw === 'string' || typeof raw === 'number') id = raw;
+    }
+    return { invalid: true, id };
+  });
 }
 
 /**

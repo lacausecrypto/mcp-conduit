@@ -233,3 +233,93 @@ describe('JSON_RPC_ERRORS', () => {
     expect(JSON_RPC_ERRORS.INTERNAL_ERROR).toBe(-32603);
   });
 });
+
+// ── Battle-test #2 — batch size cap + per-message errors ─────────────────────
+describe('parseJsonRpc — MAX_BATCH_SIZE cap', () => {
+  // Re-import locally so the test doesn't depend on the top-of-file imports.
+  it('rejects a batch exceeding MAX_BATCH_SIZE (100)', async () => {
+    const { parseJsonRpc, MAX_BATCH_SIZE } = await import('../../src/proxy/json-rpc.js');
+    const oversize = Array.from({ length: MAX_BATCH_SIZE + 1 }, (_, i) => ({
+      jsonrpc: '2.0' as const, id: i, method: 'ping',
+    }));
+    expect(parseJsonRpc(oversize)).toBeNull();
+  });
+
+  it('accepts a batch at exactly MAX_BATCH_SIZE', async () => {
+    const { parseJsonRpc, MAX_BATCH_SIZE } = await import('../../src/proxy/json-rpc.js');
+    const atCap = Array.from({ length: MAX_BATCH_SIZE }, (_, i) => ({
+      jsonrpc: '2.0' as const, id: i, method: 'ping',
+    }));
+    const result = parseJsonRpc(atCap);
+    expect(Array.isArray(result)).toBe(true);
+    expect(result).toHaveLength(MAX_BATCH_SIZE);
+  });
+
+  it('rejects an empty batch (still null, unchanged behavior)', async () => {
+    const { parseJsonRpc } = await import('../../src/proxy/json-rpc.js');
+    expect(parseJsonRpc([])).toBeNull();
+  });
+});
+
+describe('parseJsonRpcBatchPartial — per-message errors', () => {
+  it('returns one entry per message — valid messages pass through', async () => {
+    const { parseJsonRpcBatchPartial, isInvalidBatchEntry } = await import('../../src/proxy/json-rpc.js');
+    const result = parseJsonRpcBatchPartial([
+      { jsonrpc: '2.0', id: 1, method: 'tools/list' },
+      { jsonrpc: '2.0', id: 2, method: 'ping' },
+    ]);
+    expect(result).toHaveLength(2);
+    expect(isInvalidBatchEntry(result![0])).toBe(false);
+  });
+
+  it('returns InvalidBatchEntry placeholders for malformed messages', async () => {
+    const { parseJsonRpcBatchPartial, isInvalidBatchEntry } = await import('../../src/proxy/json-rpc.js');
+    const result = parseJsonRpcBatchPartial([
+      { jsonrpc: '2.0', id: 1, method: 'tools/list' },
+      { not_jsonrpc: 'broken' },
+      { jsonrpc: '1.0', id: 3, method: 'old' }, // wrong version
+      { jsonrpc: '2.0', id: 4, method: 'tools/call' },
+    ]);
+    expect(result).toHaveLength(4);
+    expect(isInvalidBatchEntry(result![0])).toBe(false);
+    expect(isInvalidBatchEntry(result![1])).toBe(true);
+    expect(isInvalidBatchEntry(result![2])).toBe(true);
+    expect(isInvalidBatchEntry(result![3])).toBe(false);
+  });
+
+  it('preserves the id of the broken entry when one exists', async () => {
+    const { parseJsonRpcBatchPartial, isInvalidBatchEntry } = await import('../../src/proxy/json-rpc.js');
+    const result = parseJsonRpcBatchPartial([
+      { jsonrpc: '1.0', id: 42, method: 'old' }, // bad version, id 42
+      { not_object: true, id: 'str-id' },
+    ]);
+    const first = result![0];
+    const second = result![1];
+    expect(isInvalidBatchEntry(first) && first.id).toBe(42);
+    expect(isInvalidBatchEntry(second) && second.id).toBe('str-id');
+  });
+
+  it('falls back to id=null when the entry has no usable id', async () => {
+    const { parseJsonRpcBatchPartial, isInvalidBatchEntry } = await import('../../src/proxy/json-rpc.js');
+    const result = parseJsonRpcBatchPartial([
+      'not-an-object',
+      42,
+      null,
+    ]);
+    expect(result).toHaveLength(3);
+    for (const entry of result!) {
+      expect(isInvalidBatchEntry(entry)).toBe(true);
+      expect((entry as { id: unknown }).id).toBeNull();
+    }
+  });
+
+  it('refuses non-arrays and oversize batches', async () => {
+    const { parseJsonRpcBatchPartial, MAX_BATCH_SIZE } = await import('../../src/proxy/json-rpc.js');
+    expect(parseJsonRpcBatchPartial({ not: 'array' })).toBeNull();
+    expect(parseJsonRpcBatchPartial([])).toBeNull();
+    const oversize = Array.from({ length: MAX_BATCH_SIZE + 1 }, () => ({
+      jsonrpc: '2.0', id: 1, method: 'ping',
+    }));
+    expect(parseJsonRpcBatchPartial(oversize)).toBeNull();
+  });
+});

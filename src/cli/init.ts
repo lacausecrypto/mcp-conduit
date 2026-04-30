@@ -50,7 +50,7 @@ export async function runInit(): Promise<void> {
   // ─── Gateway ────────────────────────────────────────────────
   console.log('  1/5  Gateway');
   const port = await ask('Port', '8080');
-  const host = await ask('Host', '0.0.0.0');
+  const host = await ask('Host', '127.0.0.1');
 
   // ─── Servers ────────────────────────────────────────────────
   console.log('');

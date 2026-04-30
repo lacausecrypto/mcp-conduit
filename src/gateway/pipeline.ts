@@ -24,7 +24,7 @@ import type { ServerRegistry } from '../router/registry.js';
 import type { CacheStore } from '../cache/cache-store.js';
 import type { InflightTracker } from '../cache/inflight.js';
 import type { ConduitLogger, RequestLogContext } from '../observability/logger.js';
-import type { ConduitMetrics } from '../observability/metrics.js';
+import { sanitizeMetricLabel, type ConduitMetrics } from '../observability/metrics.js';
 import type { ConduitGatewayConfig } from '../config/types.js';
 import type { RequestContext, CoreResult } from '../proxy/transport.js';
 import type { JsonRpcMessage } from '../proxy/json-rpc.js';
@@ -47,6 +47,22 @@ import { authenticate } from '../auth/authenticator.js';
 import { evaluateAcl, filterToolsList } from '../auth/acl.js';
 import { evaluateGuardrails } from '../guardrails/evaluator.js';
 import { sendWebhook } from '../guardrails/webhook.js';
+import { resolveConnectProfile } from '../connect/export.js';
+import { extractProfileIdFromTarget } from '../connect/profile-target.js';
+import {
+  IdentityRuntime,
+  UpstreamIdentityError,
+} from '../identity/runtime.js';
+import type { AuthenticatedPrincipal } from '../identity/types.js';
+import { GovernanceRuntime, buildRequestFingerprint } from '../governance/runtime.js';
+import type { GovernanceApprovalRequestSummary } from '../governance/types.js';
+
+const GOVERNANCE_DENIED_CODE = -32010;
+const APPROVAL_REQUIRED_CODE = -32011;
+const GOVERNANCE_QUOTA_CODE = -32012;
+const APPROVAL_HEADER = 'x-conduit-approval-id';
+const PROFILE_PROTOCOL_VERSION = '2024-11-05';
+const PROFILE_SERVER_VERSION = '1.1.0';
 
 /**
  * BUG FIX: Cacheable tools previously lost backend JSON-RPC error codes.
@@ -76,6 +92,8 @@ export class RequestPipeline {
   private readonly logger: ConduitLogger;
   private readonly metrics: ConduitMetrics;
   private readonly config: ConduitGatewayConfig;
+  private readonly identityRuntime: IdentityRuntime;
+  private readonly governanceRuntime: GovernanceRuntime;
   private readonly rateLimiter: RateLimiter | null;
   private l2Cache: RedisCacheStore | null = null;
   private l2TtlMultiplier = 3;
@@ -89,6 +107,8 @@ export class RequestPipeline {
     logger: ConduitLogger,
     metrics: ConduitMetrics,
     config: ConduitGatewayConfig,
+    identityRuntime: IdentityRuntime,
+    governanceRuntime: GovernanceRuntime,
     rateLimiter?: RateLimiter,
   ) {
     this.router = router;
@@ -98,6 +118,8 @@ export class RequestPipeline {
     this.logger = logger;
     this.metrics = metrics;
     this.config = config;
+    this.identityRuntime = identityRuntime;
+    this.governanceRuntime = governanceRuntime;
     this.rateLimiter = rateLimiter ?? null;
   }
 
@@ -135,8 +157,9 @@ export class RequestPipeline {
     // =========================================================================
     // Étape 1 — Authentification
     // =========================================================================
-    let clientId = context.rawHeaders['x-forwarded-for'] ?? 'anonymous';
+    let clientId = 'anonymous';
     let tenantId = 'default';
+    let claims: Record<string, unknown> | undefined;
 
     if (this.config.auth) {
       const authResult = await authenticate(context.rawHeaders, this.config.auth);
@@ -153,7 +176,15 @@ export class RequestPipeline {
       }
       clientId = authResult.client_id;
       tenantId = authResult.tenant_id;
+      claims = authResult.claims;
     }
+
+    const principal: AuthenticatedPrincipal = {
+      client_id: clientId,
+      tenant_id: tenantId,
+      ...(context.authHeader ? { auth_header: context.authHeader } : {}),
+      ...(claims ? { claims } : {}),
+    };
 
     // =========================================================================
     // Hook: after:auth
@@ -173,15 +204,15 @@ export class RequestPipeline {
     try {
       // Routage selon la méthode MCP
       if (method === 'tools/call') {
-        return await this.handleToolCall(message, context, serverId, logContext, clientId, tenantId, pluginCtx);
+        return await this.handleToolCall(message, context, serverId, logContext, clientId, tenantId, principal, pluginCtx);
       }
 
       if (method === 'tools/list') {
-        return await this.handleToolsList(message, context, serverId, logContext, clientId);
+        return await this.handleToolsList(message, context, serverId, logContext, clientId, principal);
       }
 
       // Passthrough pour toutes les autres méthodes
-      return await this.handlePassthrough(message, context, serverId, logContext, clientId);
+      return await this.handlePassthrough(message, context, serverId, logContext, principal);
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Erreur interne';
 
@@ -206,10 +237,37 @@ export class RequestPipeline {
     logContext: RequestLogContext,
     clientId: string,
     tenantId: string,
+    principal: AuthenticatedPrincipal,
     pluginCtx: PluginContext,
   ): Promise<CoreResult> {
+    const profileId = extractProfileIdFromTarget(serverId);
+    const profileServerIds = profileId ? this.getProfileServerIdSet(profileId) : null;
     const toolName = extractToolName(message) ?? '';
     const toolArgs = extractToolArgs(message);
+    const directClient = profileServerIds ? null : this.router.getClientForServer(serverId);
+    const resolvedToolName = this.router.resolveToolName(toolName);
+    const resolvedCall = directClient ? null : this.router.resolveToolCall(toolName);
+    const actualServerId = directClient
+      ? serverId
+      : (resolvedCall?.serverId ?? serverId);
+    const actualToolName = directClient
+      ? (resolvedToolName?.serverId === serverId ? resolvedToolName.toolName : toolName)
+      : (resolvedCall?.toolName ?? toolName);
+
+    if (profileServerIds && !profileServerIds.has(actualServerId)) {
+      return {
+        body: buildJsonRpcError(
+          message.id,
+          JSON_RPC_ERRORS.METHOD_NOT_FOUND,
+          `Outil introuvable dans le profil "${profileId}" : ${toolName}`,
+        ),
+      };
+    }
+    const workspace = this.governanceRuntime.resolveWorkspace({
+      client_id: clientId,
+      tenant_id: tenantId,
+    });
+    const workspaceRoles = this.governanceRuntime.getRolesForClient(workspace.id, clientId);
 
     logContext.toolName = toolName;
     logContext.args = toolArgs;
@@ -218,21 +276,20 @@ export class RequestPipeline {
     // Étape 2 — ACL : vérifier si le client peut appeler cet outil
     // =========================================================================
     if (this.config.acl?.enabled) {
-      // Résoudre le vrai serverId et toolName (sans namespace)
-      const resolved = this.router.resolveToolCall(toolName);
-      const aclServerId = resolved?.serverId ?? serverId;
-      const aclToolName = resolved?.toolName ?? toolName;
-
       const decision = evaluateAcl(
         clientId,
-        aclServerId,
-        aclToolName,
+        actualServerId,
+        actualToolName,
         this.config.acl.policies,
         this.config.acl.default_action,
       );
 
       if (!decision.allowed) {
-        this.metrics.aclDenialsTotal.inc({ client: clientId, server: aclServerId, tool: aclToolName });
+        this.metrics.aclDenialsTotal.inc({
+          client: sanitizeMetricLabel(clientId),
+          server: sanitizeMetricLabel(actualServerId),
+          tool: sanitizeMetricLabel(actualToolName),
+        });
         this.logger.log(logContext, {
           status: 'error',
           responseSize: 0,
@@ -243,25 +300,126 @@ export class RequestPipeline {
           body: buildJsonRpcError(
             message.id,
             -32000,
-            `Access denied: client '${clientId}' is not allowed to call '${aclToolName}' on server '${aclServerId}'`,
+            `Access denied: client '${clientId}' is not allowed to call '${actualToolName}' on server '${actualServerId}'`,
           ),
         };
       }
     }
 
     // =========================================================================
-    // Étape 2b — Guardrails : inspecter l'appel d'outil
+    // Étape 2b — Gouvernance workspace/RBAC
+    // =========================================================================
+    if (this.governanceRuntime.isEnabled()) {
+      const governanceDecision = this.governanceRuntime.evaluateToolPolicy({
+        workspace,
+        client_id: clientId,
+        roles: workspaceRoles,
+        server_id: actualServerId,
+        tool_name: actualToolName,
+      });
+
+      if (governanceDecision.effect === 'deny') {
+        this.governanceRuntime.audit({
+          workspace_id: workspace.id,
+          actor_client_id: clientId,
+          action: 'tool_policy_denied',
+          resource_type: 'tool_call',
+          resource_id: `${actualServerId}:${actualToolName}`,
+          outcome: 'denied',
+          details: {
+            policy_name: governanceDecision.policy_name,
+            trace_id: context.traceId,
+          },
+        });
+        this.logger.log(logContext, {
+          status: 'error',
+          responseSize: 0,
+          errorCode: GOVERNANCE_DENIED_CODE,
+          errorMessage: governanceDecision.reason,
+        });
+        return {
+          body: buildJsonRpcError(
+            message.id,
+            GOVERNANCE_DENIED_CODE,
+            governanceDecision.reason,
+            {
+              workspace_id: workspace.id,
+              policy_name: governanceDecision.policy_name,
+              roles: workspaceRoles,
+            },
+          ),
+        };
+      }
+
+      if (governanceDecision.effect === 'require_approval') {
+        const approvalResult = this.enforceApprovalRequirement(
+          message.id,
+          context,
+          clientId,
+          workspace.id,
+          actualServerId,
+          actualToolName,
+          toolArgs,
+          'governance',
+          governanceDecision.policy_name || 'governance',
+          governanceDecision.reason,
+          logContext,
+        );
+        if (approvalResult) {
+          return approvalResult;
+        }
+      }
+
+      const workspaceQuota = await this.governanceRuntime.consumeWorkspaceQuota(workspace.id);
+      if (!workspaceQuota.allowed) {
+        this.governanceRuntime.audit({
+          workspace_id: workspace.id,
+          actor_client_id: clientId,
+          action: 'workspace_quota_blocked',
+          resource_type: 'workspace_quota',
+          resource_id: workspace.id,
+          outcome: 'denied',
+          details: {
+            blocked_by: workspaceQuota.blocked_by,
+            trace_id: context.traceId,
+          },
+        });
+        this.logger.log(logContext, {
+          status: 'error',
+          responseSize: 0,
+          errorCode: GOVERNANCE_QUOTA_CODE,
+          errorMessage: `Workspace quota exceeded: ${workspaceQuota.blocked_by ?? 'workspace'}`,
+        });
+        return {
+          body: buildJsonRpcError(
+            message.id,
+            GOVERNANCE_QUOTA_CODE,
+            `Workspace quota exceeded: ${workspaceQuota.blocked_by ?? 'workspace'}`,
+            {
+              workspace_id: workspace.id,
+              retry_after: workspaceQuota.retry_after ?? 60,
+            },
+          ),
+          retryAfter: workspaceQuota.retry_after ?? 60,
+        };
+      }
+    }
+
+    // =========================================================================
+    // Étape 2c — Guardrails : inspecter l'appel d'outil
     // =========================================================================
     if (this.config.guardrails?.enabled) {
-      const grServerId = this.router.resolveToolCall(toolName)?.serverId ?? serverId;
-      const grToolName = this.router.resolveToolCall(toolName)?.toolName ?? toolName;
       const grDecision = evaluateGuardrails(
-        { clientId, serverId: grServerId, toolName: grToolName, toolArgs },
+        { clientId, serverId: actualServerId, toolName: actualToolName, toolArgs },
         this.config.guardrails,
       );
 
       if (grDecision.action === 'block') {
-        this.metrics.guardrailActionsTotal.inc({ rule: grDecision.rule_name, action: 'block', tool: grToolName });
+        this.metrics.guardrailActionsTotal.inc({
+          rule: sanitizeMetricLabel(grDecision.rule_name),
+          action: 'block',
+          tool: sanitizeMetricLabel(actualToolName),
+        });
         this.logger.log(logContext, {
           status: 'error',
           responseSize: 0,
@@ -276,8 +434,8 @@ export class RequestPipeline {
             rule_name: grDecision.rule_name,
             severity: grDecision.severity ?? 'medium',
             client_id: clientId,
-            server_id: grServerId,
-            tool_name: grToolName,
+            server_id: actualServerId,
+            tool_name: actualToolName,
             tool_args: toolArgs,
             message: grDecision.reason,
             timestamp: new Date().toISOString(),
@@ -289,16 +447,45 @@ export class RequestPipeline {
         };
       }
 
+      if (grDecision.action === 'require_approval') {
+        this.metrics.guardrailActionsTotal.inc({
+          rule: sanitizeMetricLabel(grDecision.rule_name),
+          action: 'require_approval',
+          tool: sanitizeMetricLabel(actualToolName),
+        });
+        const approvalResult = this.enforceApprovalRequirement(
+          message.id,
+          context,
+          clientId,
+          workspace.id,
+          actualServerId,
+          actualToolName,
+          toolArgs,
+          'guardrail',
+          grDecision.rule_name || 'guardrail',
+          grDecision.reason,
+          logContext,
+          true,
+        );
+        if (approvalResult) {
+          return approvalResult;
+        }
+      }
+
       if (grDecision.action === 'alert') {
-        this.metrics.guardrailActionsTotal.inc({ rule: grDecision.rule_name, action: 'alert', tool: grToolName });
+        this.metrics.guardrailActionsTotal.inc({
+          rule: sanitizeMetricLabel(grDecision.rule_name),
+          action: 'alert',
+          tool: sanitizeMetricLabel(actualToolName),
+        });
         if (grDecision.webhook) {
           sendWebhook(grDecision.webhook, {
             event: 'guardrail_alert',
             rule_name: grDecision.rule_name,
             severity: grDecision.severity ?? 'medium',
             client_id: clientId,
-            server_id: grServerId,
-            tool_name: grToolName,
+            server_id: actualServerId,
+            tool_name: actualToolName,
             tool_args: toolArgs,
             message: grDecision.reason,
             timestamp: new Date().toISOString(),
@@ -317,7 +504,11 @@ export class RequestPipeline {
       if (!rlResult.allowed) {
         const blockedBy = rlResult.blocked_by ?? 'client';
         const retryAfter = rlResult.retry_after ?? 60;
-        this.metrics.rateLimitRejectionsTotal.inc({ client: clientId, server: serverId, limit_type: blockedBy });
+        this.metrics.rateLimitRejectionsTotal.inc({
+          client: sanitizeMetricLabel(clientId),
+          server: sanitizeMetricLabel(serverId),
+          limit_type: blockedBy,
+        });
         this.logger.log(logContext, {
           status: 'error',
           responseSize: 0,
@@ -340,17 +531,15 @@ export class RequestPipeline {
     // =========================================================================
     let routed: RoutedRequest | null;
 
-    const directClient = this.router.getClientForServer(serverId);
     if (directClient) {
       // Use resolveToolName (no extra selectReplica) just for namespace stripping
-      const resolved = this.router.resolveToolName(toolName);
-      if (resolved && resolved.serverId === serverId) {
-        routed = { serverId: resolved.serverId, toolName: resolved.toolName, client: directClient };
+      if (resolvedToolName && resolvedToolName.serverId === serverId) {
+        routed = { serverId: resolvedToolName.serverId, toolName: resolvedToolName.toolName, client: directClient };
       } else {
         routed = { serverId, toolName, client: directClient };
       }
     } else {
-      routed = this.router.resolveToolCall(toolName);
+      routed = resolvedCall;
       if (!routed) {
         const errMsg = this.router.buildToolNotFoundError(message.id, toolName);
         this.logger.log(logContext, {
@@ -363,11 +552,9 @@ export class RequestPipeline {
       }
     }
 
-    const actualServerId = routed.serverId;
-    const actualToolName = routed.toolName;
     const client = routed.client;
 
-    logContext.serverId = actualServerId;
+    logContext.serverId = routed.serverId;
 
     // Récupération des annotations et décision de cache
     const annotations = this.registry.getAnnotations(actualServerId, actualToolName);
@@ -392,6 +579,18 @@ export class RequestPipeline {
         if (count > 0) {
           console.log(`[Conduit] Invalidé ${count} entrée(s) pour "${invalidatedTool}" (déclenché par "${actualToolName}")`);
         }
+        if (this.l2Cache) {
+          try {
+            const l2Count = await this.l2Cache.deleteByTool(invalidatedTool, actualServerId);
+            if (l2Count > 0) {
+              console.log(`[Conduit] Invalidé ${l2Count} entrée(s) L2 pour "${invalidatedTool}" (déclenché par "${actualToolName}")`);
+            }
+          } catch (error) {
+            console.warn(
+              `[Conduit] L2 invalidation failed for "${invalidatedTool}" on "${actualServerId}": ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+        }
       }
     }
 
@@ -399,9 +598,9 @@ export class RequestPipeline {
     if (!policy.shouldCache || !this.config.cache.enabled) {
       this.cacheStore.recordSkip();
       this.metrics.requestsTotal.inc({
-        server: actualServerId,
+        server: sanitizeMetricLabel(actualServerId),
         method: 'tools/call',
-        tool: actualToolName,
+        tool: sanitizeMetricLabel(actualToolName),
         status: 'success',
         cache_status: 'SKIP',
       });
@@ -412,7 +611,11 @@ export class RequestPipeline {
         if (!rlResult.allowed) {
           const blockedBy = rlResult.blocked_by ?? 'server';
           const retryAfter = rlResult.retry_after ?? 60;
-          this.metrics.rateLimitRejectionsTotal.inc({ client: clientId, server: actualServerId, limit_type: blockedBy });
+          this.metrics.rateLimitRejectionsTotal.inc({
+            client: sanitizeMetricLabel(clientId),
+            server: sanitizeMetricLabel(actualServerId),
+            limit_type: blockedBy,
+          });
           return {
             body: buildJsonRpcError(
               message.id,
@@ -425,7 +628,21 @@ export class RequestPipeline {
       }
 
       const forwardedMessage = this.buildForwardMessage(message, actualToolName);
-      const result = await this.forwardToUpstream(forwardedMessage, context, client, actualServerId);
+      let result: CoreResult;
+      try {
+        result = await this.forwardToUpstream(forwardedMessage, context, client, serverConfig, principal);
+      } catch (error) {
+        if (error instanceof UpstreamIdentityError) {
+          this.logger.log(logContext, {
+            status: 'error',
+            responseSize: 0,
+            errorCode: -32000,
+            errorMessage: error.message,
+          });
+          return { body: buildJsonRpcError(message.id, -32000, error.message) };
+        }
+        throw error;
+      }
 
       // Si la réponse est un flux SSE, bypass le logging normal et retourner directement
       if (result.isStream) {
@@ -452,10 +669,35 @@ export class RequestPipeline {
       return { ...result, cacheStatus: 'SKIP' };
     }
 
-    // Extraction du tenant pour l'isolation multi-tenant
-    const resolvedTenantId = this.config.tenant_isolation.enabled
-      ? extractTenantId(context.authHeader) ?? tenantId
-      : undefined;
+    // Extraction du tenant pour l'isolation multi-tenant.
+    //
+    // Audit Sprint 3 #4: when authentication is enabled, the authenticated
+    // tenant_id is the source of truth. A custom tenant header (e.g.
+    // "X-Tenant-Id") must NOT override it — otherwise any client can craft a
+    // header naming another tenant and read that tenant's cache entries.
+    // The header is only honored when no authentication context exists (i.e.
+    // the gateway is in trust-the-caller mode), in which case it serves as
+    // an additional partitioning hint.
+    let resolvedTenantId: string | undefined;
+    if (this.config.tenant_isolation.enabled) {
+      const tenantHeader = this.config.tenant_isolation.header.toLowerCase();
+      const tenantHeaderValue = context.rawHeaders[tenantHeader];
+
+      const authIsActive = Boolean(this.config.auth) && this.config.auth?.method !== 'none';
+
+      if (tenantHeader === 'authorization') {
+        // When auth is enabled, trust the authenticated tenant_id instead of
+        // deriving cache isolation from the raw bearer token.
+        resolvedTenantId = authIsActive
+          ? tenantId
+          : (extractTenantId(context.authHeader) ?? tenantId);
+      } else if (authIsActive) {
+        // Authenticated principal wins; ignore caller-supplied header.
+        resolvedTenantId = tenantId;
+      } else {
+        resolvedTenantId = tenantHeaderValue ?? tenantId;
+      }
+    }
     const groupId = context.groupHeader ?? undefined;
 
     // Génération de la clé de cache
@@ -522,7 +764,11 @@ export class RequestPipeline {
       if (!rlResult.allowed) {
         const blockedBy = rlResult.blocked_by ?? 'server';
         const retryAfter = rlResult.retry_after ?? 60;
-        this.metrics.rateLimitRejectionsTotal.inc({ client: clientId, server: actualServerId, limit_type: blockedBy });
+        this.metrics.rateLimitRejectionsTotal.inc({
+          client: sanitizeMetricLabel(clientId),
+          server: sanitizeMetricLabel(actualServerId),
+          limit_type: blockedBy,
+        });
         this.logger.log(logContext, {
           status: 'error',
           responseSize: 0,
@@ -552,7 +798,7 @@ export class RequestPipeline {
       const deduped = await this.inflightTracker.deduplicate(
         cacheKey,
         async () => {
-          const upstream = await this.forwardToUpstream(forwardedMessage, context, client, actualServerId);
+          const upstream = await this.forwardToUpstream(forwardedMessage, context, client, serverConfig, principal);
           const body = upstream.body as { result?: Record<string, unknown>; error?: { code?: number; message?: string } };
 
           if (body?.error) {
@@ -568,6 +814,17 @@ export class RequestPipeline {
       toolResult = deduped.result;
       wasCoalesced = deduped.wasCoalesced;
     } catch (error) {
+      if (error instanceof UpstreamIdentityError) {
+        this.logger.log(logContext, {
+          status: 'error',
+          responseSize: 0,
+          errorCode: -32000,
+          errorMessage: error.message,
+        });
+        return {
+          body: buildJsonRpcError(message.id, -32000, error.message),
+        };
+      }
       if (error instanceof UpstreamRpcError) {
         this.logger.log(logContext, {
           status: 'error',
@@ -583,7 +840,10 @@ export class RequestPipeline {
     }
 
     if (wasCoalesced) {
-      this.metrics.dedupCoalescedTotal.inc({ server: actualServerId, tool: actualToolName });
+      this.metrics.dedupCoalescedTotal.inc({
+        server: sanitizeMetricLabel(actualServerId),
+        tool: sanitizeMetricLabel(actualToolName),
+      });
     }
 
     // =========================================================================
@@ -595,6 +855,34 @@ export class RequestPipeline {
     // =========================================================================
     // Étape 7 — Mise en cache
     // =========================================================================
+    // MCP tool failures surface as a successful JSON-RPC response with
+    // `isError: true` in the result body (spec: structured tool errors). These
+    // are transient by nature (invalid input, rate-limited upstream, partial
+    // outage) and must NOT be cached: a single failure for one client would
+    // poison every subsequent caller for the TTL of the policy. Treat them
+    // exactly like a SKIP path while still surfacing the body to the caller.
+    const isToolError = (toolResult as { isError?: unknown } | null)?.isError === true;
+    if (isToolError) {
+      this.cacheStore.recordSkip();
+      this.metrics.requestsTotal.inc({
+        server: sanitizeMetricLabel(actualServerId),
+        method: 'tools/call',
+        tool: sanitizeMetricLabel(actualToolName),
+        status: 'success',
+        cache_status: 'SKIP_ERROR',
+      });
+      const errorBody = buildJsonRpcResult(message.id, toolResult);
+      const errorBodyStr = JSON.stringify(errorBody);
+      this.logger.log(logContext, {
+        status: 'error',
+        responseSize: errorBodyStr.length,
+        cacheStatus: 'SKIP_ERROR',
+        errorCode: -32000,
+        errorMessage: 'tool returned isError=true',
+      });
+      return { body: errorBody, cacheStatus: 'SKIP_ERROR' };
+    }
+
     const entry: CacheEntry = {
       result: toolResult,
       createdAt: Date.now(),
@@ -638,10 +926,30 @@ export class RequestPipeline {
     serverId: string,
     logContext: RequestLogContext,
     clientId: string,
+    principal: AuthenticatedPrincipal,
   ): Promise<CoreResult> {
+    const profileId = extractProfileIdFromTarget(serverId);
+    const profileServerIds = profileId ? this.getProfileServerIdSet(profileId) : null;
     const client = this.router.getClientForServer(serverId);
-    if (client) {
-      const result = await this.passthroughToServer(message, context, client);
+    if (client && !profileServerIds) {
+      const serverConfig = this.config.servers.find((server) => server.id === serverId);
+      if (!serverConfig) {
+        return {
+          body: buildJsonRpcError(message.id, JSON_RPC_ERRORS.INTERNAL_ERROR, `Configuration manquante pour : ${serverId}`),
+        };
+      }
+
+      let result: CoreResult;
+      try {
+        result = await this.passthroughToServer(message, context, client, serverConfig, principal);
+      } catch (error) {
+        if (error instanceof UpstreamIdentityError) {
+          return {
+            body: buildJsonRpcError(message.id, -32000, error.message),
+          };
+        }
+        throw error;
+      }
 
       // Mise à jour des annotations depuis la réponse
       if (result.body && typeof result.body === 'object') {
@@ -652,19 +960,36 @@ export class RequestPipeline {
         }
       }
 
-      // Filtrage ACL des outils
+      // Filtrage ACL + gouvernance des outils
       let filteredBody = result.body;
-      if (this.config.acl?.enabled && result.body && typeof result.body === 'object') {
+      if (result.body && typeof result.body === 'object') {
         const body = result.body as { result?: { tools?: ToolMetadata[] } };
         const tools = body.result?.tools;
         if (Array.isArray(tools)) {
-          const allowed = filterToolsList(
-            clientId,
-            serverId,
-            tools,
-            this.config.acl.policies,
-            this.config.acl.default_action,
-          );
+          let allowed = tools;
+          if (this.config.acl?.enabled) {
+            allowed = filterToolsList(
+              clientId,
+              serverId,
+              allowed,
+              this.config.acl.policies,
+              this.config.acl.default_action,
+            );
+          }
+          if (this.governanceRuntime.isEnabled()) {
+            const workspace = this.governanceRuntime.resolveWorkspace({
+              client_id: clientId,
+              tenant_id: principal.tenant_id,
+            });
+            const roles = this.governanceRuntime.getRolesForClient(workspace.id, clientId);
+            allowed = allowed.filter((tool) => this.governanceRuntime.canViewTool({
+              workspace,
+              client_id: clientId,
+              roles,
+              server_id: serverId,
+              tool_name: tool.name,
+            }));
+          }
           filteredBody = {
             ...(result.body as object),
             result: { ...body.result, tools: allowed },
@@ -682,31 +1007,46 @@ export class RequestPipeline {
       return { body: filteredBody, cacheStatus: 'BYPASS' };
     }
 
-    // Multi-serveur : agrégation avec filtrage ACL
+    // Multi-serveur : agrégation avec filtrage ACL + gouvernance
     let tools: ToolMetadata[];
-    if (this.config.acl?.enabled) {
-      // Filtrer chaque outil par son serveur d'origine
-      const aggregated = this.router.getAggregatedToolsWithServerIds();
-      tools = aggregated
-        .filter(({ serverId: sid, toolName }) => {
+    const aggregatedTools = this.router.getAggregatedToolsWithServerIds()
+      .filter(({ serverId: sid }) => !profileServerIds || profileServerIds.has(sid));
+    tools = aggregatedTools
+      .filter(({ serverId: sid, toolName }) => {
+        if (this.config.acl?.enabled) {
           const decision = evaluateAcl(
             clientId,
             sid,
             toolName,
-            this.config.acl!.policies,
-            this.config.acl!.default_action,
+            this.config.acl.policies,
+            this.config.acl.default_action,
           );
-          return decision.allowed;
-        })
-        .map(({ namespacedName, toolDef }) => ({ ...toolDef, name: namespacedName }));
-    } else {
-      const aggregatedMsg = this.router.buildAggregatedToolsList(message.id);
-      const bodyResult = (aggregatedMsg as { result?: { tools?: ToolMetadata[] } }).result;
-      tools = bodyResult?.tools ?? [];
-    }
+          if (!decision.allowed) {
+            return false;
+          }
+        }
 
-    const aggregated = buildJsonRpcResult(message.id, { tools });
-    const bodyStr = JSON.stringify(aggregated);
+        if (this.governanceRuntime.isEnabled()) {
+          const workspace = this.governanceRuntime.resolveWorkspace({
+            client_id: clientId,
+            tenant_id: principal.tenant_id,
+          });
+          const roles = this.governanceRuntime.getRolesForClient(workspace.id, clientId);
+          return this.governanceRuntime.canViewTool({
+            workspace,
+            client_id: clientId,
+            roles,
+            server_id: sid,
+            tool_name: toolName,
+          });
+        }
+
+        return true;
+      })
+      .map(({ namespacedName, toolDef }) => ({ ...toolDef, name: namespacedName }));
+
+    const aggregatedBody = buildJsonRpcResult(message.id, { tools });
+    const bodyStr = JSON.stringify(aggregatedBody);
 
     this.logger.log(logContext, {
       status: 'success',
@@ -714,7 +1054,96 @@ export class RequestPipeline {
       cacheStatus: 'BYPASS',
     });
 
-    return { body: aggregated, cacheStatus: 'BYPASS' };
+    return { body: aggregatedBody, cacheStatus: 'BYPASS' };
+  }
+
+  private enforceApprovalRequirement(
+    messageId: JsonRpcMessage['id'],
+    context: RequestContext,
+    clientId: string,
+    workspaceId: string,
+    serverId: string,
+    toolName: string,
+    toolArgs: Record<string, unknown>,
+    source: 'guardrail' | 'governance',
+    ruleName: string,
+    reason: string,
+    logContext: RequestLogContext,
+    markGuardrail = false,
+  ): CoreResult | null {
+    const providedApprovalId = context.rawHeaders[APPROVAL_HEADER];
+    if (providedApprovalId) {
+      const approved = this.governanceRuntime.verifyApprovalGrant(
+        providedApprovalId,
+        workspaceId,
+        clientId,
+        serverId,
+        toolName,
+        toolArgs,
+      );
+      if (approved) {
+        return null;
+      }
+
+      this.logger.log(logContext, {
+        status: 'error',
+        responseSize: 0,
+        errorCode: APPROVAL_REQUIRED_CODE,
+        errorMessage: 'Approval token is invalid, expired, or does not match this request',
+        ...(markGuardrail ? { guardrailRule: ruleName, guardrailAction: 'require_approval' } : {}),
+      });
+      return {
+        body: buildJsonRpcError(
+          messageId,
+          APPROVAL_REQUIRED_CODE,
+          'Approval token is invalid, expired, or does not match this request',
+          {
+            workspace_id: workspaceId,
+            approval_header: 'X-Conduit-Approval-Id',
+          },
+        ),
+      };
+    }
+
+    const approval = this.governanceRuntime.createApprovalRequest({
+      source,
+      workspace_id: workspaceId,
+      requester_client_id: clientId,
+      server_id: serverId,
+      tool_name: toolName,
+      rule_name: ruleName,
+      reason,
+      trace_id: context.traceId,
+      request_fingerprint: buildRequestFingerprint(serverId, toolName, toolArgs),
+      tool_args: toolArgs,
+    });
+
+    this.logger.log(logContext, {
+      status: 'error',
+      responseSize: 0,
+      errorCode: APPROVAL_REQUIRED_CODE,
+      errorMessage: reason,
+      ...(markGuardrail ? { guardrailRule: ruleName, guardrailAction: 'require_approval' } : {}),
+    });
+
+    return {
+      body: buildJsonRpcError(
+        messageId,
+        APPROVAL_REQUIRED_CODE,
+        reason,
+        this.buildApprovalErrorData(approval),
+      ),
+    };
+  }
+
+  private buildApprovalErrorData(approval: GovernanceApprovalRequestSummary): Record<string, unknown> {
+    return {
+      approval_request_id: approval.id,
+      status: approval.status,
+      workspace_id: approval.workspace_id,
+      approval_header: 'X-Conduit-Approval-Id',
+      expires_at: approval.expires_at,
+    };
   }
 
   /**
@@ -725,8 +1154,13 @@ export class RequestPipeline {
     context: RequestContext,
     serverId: string,
     logContext: RequestLogContext,
-    _clientId: string,
+    principal: AuthenticatedPrincipal,
   ): Promise<CoreResult> {
+    const profileId = extractProfileIdFromTarget(serverId);
+    if (profileId) {
+      return this.handleProfilePassthrough(message, profileId, logContext);
+    }
+
     const client = this.router.getClientForServer(serverId);
     if (!client) {
       const err = this.router.buildServerUnavailableError(message.id, serverId);
@@ -738,7 +1172,32 @@ export class RequestPipeline {
       return { body: err };
     }
 
-    const result = await this.passthroughToServer(message, context, client);
+    const serverConfig = this.config.servers.find((server) => server.id === serverId);
+    if (!serverConfig) {
+      const err = buildJsonRpcError(message.id, JSON_RPC_ERRORS.INTERNAL_ERROR, `Configuration manquante pour : ${serverId}`);
+      this.logger.log(logContext, {
+        status: 'error',
+        responseSize: JSON.stringify(err).length,
+        errorCode: JSON_RPC_ERRORS.INTERNAL_ERROR,
+      });
+      return { body: err };
+    }
+
+    let result: CoreResult;
+    try {
+      result = await this.passthroughToServer(message, context, client, serverConfig, principal);
+    } catch (error) {
+      if (error instanceof UpstreamIdentityError) {
+        this.logger.log(logContext, {
+          status: 'error',
+          responseSize: 0,
+          errorCode: -32000,
+          errorMessage: error.message,
+        });
+        return { body: buildJsonRpcError(message.id, -32000, error.message) };
+      }
+      throw error;
+    }
     const bodyStr = result.body ? JSON.stringify(result.body) : '';
 
     this.logger.log(logContext, {
@@ -750,6 +1209,65 @@ export class RequestPipeline {
     return { ...result, cacheStatus: 'BYPASS' };
   }
 
+  private handleProfilePassthrough(
+    message: JsonRpcMessage,
+    profileId: string,
+    logContext: RequestLogContext,
+  ): CoreResult {
+    if (message.method === 'initialize') {
+      const profile = resolveConnectProfile(this.config, profileId);
+      const body = buildJsonRpcResult(message.id, {
+        protocolVersion: PROFILE_PROTOCOL_VERSION,
+        capabilities: {
+          tools: {
+            listChanged: false,
+          },
+        },
+        serverInfo: {
+          name: `conduit-profile-${profile.id}`,
+          title: `Conduit ${profile.label}`,
+          version: PROFILE_SERVER_VERSION,
+        },
+      });
+
+      this.logger.log(logContext, {
+        status: 'success',
+        responseSize: JSON.stringify(body).length,
+        cacheStatus: 'BYPASS',
+      });
+
+      return {
+        body,
+        cacheStatus: 'BYPASS',
+        upstreamSessionId: `conduit-profile-${profile.id}`,
+      };
+    }
+
+    if (message.method === 'notifications/initialized') {
+      const body = buildJsonRpcResult(message.id, { acknowledged: true });
+      this.logger.log(logContext, {
+        status: 'success',
+        responseSize: JSON.stringify(body).length,
+        cacheStatus: 'BYPASS',
+      });
+      return { body, cacheStatus: 'BYPASS' };
+    }
+
+    const err = buildJsonRpcError(
+      message.id,
+      JSON_RPC_ERRORS.METHOD_NOT_FOUND,
+      `La méthode ${message.method ?? 'unknown'} n'est pas prise en charge sur /mcp/profile/${profileId}`,
+    );
+
+    this.logger.log(logContext, {
+      status: 'error',
+      responseSize: JSON.stringify(err).length,
+      errorCode: JSON_RPC_ERRORS.METHOD_NOT_FOUND,
+    });
+
+    return { body: err };
+  }
+
   /**
    * Transmet une requête vers un serveur en amont (sans logique de cache).
    */
@@ -757,8 +1275,10 @@ export class RequestPipeline {
     message: JsonRpcMessage,
     context: RequestContext,
     client: import('../proxy/mcp-client-interface.js').IMcpClient,
+    serverConfig: import('../config/types.js').ServerConfig,
+    principal: AuthenticatedPrincipal,
   ): Promise<CoreResult> {
-    const extraHeaders = this.buildExtraHeaders(context);
+    const extraHeaders = this.buildExtraHeaders(context, serverConfig, principal);
     const response = await client.forward({
       body: message,
       extraHeaders,
@@ -786,13 +1306,14 @@ export class RequestPipeline {
     message: JsonRpcMessage,
     context: RequestContext,
     client: import('../proxy/mcp-client-interface.js').IMcpClient,
-    serverId: string,
+    serverConfig: import('../config/types.js').ServerConfig,
+    principal: AuthenticatedPrincipal,
   ): Promise<CoreResult> {
     try {
-      return await this.passthroughToServer(message, context, client);
+      return await this.passthroughToServer(message, context, client, serverConfig, principal);
     } catch (error) {
       this.metrics.errorsTotal.inc({
-        server: serverId,
+        server: sanitizeMetricLabel(serverConfig.id),
         type: 'upstream_error',
       });
       throw error;
@@ -823,17 +1344,41 @@ export class RequestPipeline {
   /**
    * Construit les en-têtes supplémentaires à propager en amont.
    */
-  private buildExtraHeaders(context: RequestContext): Record<string, string> {
+  private buildExtraHeaders(
+    context: RequestContext,
+    serverConfig: import('../config/types.js').ServerConfig,
+    principal: AuthenticatedPrincipal,
+  ): Record<string, string> {
     const extra: Record<string, string> = {
       'X-Conduit-Trace-Id': context.traceId,
     };
 
-    if (context.authHeader) {
-      extra['Authorization'] = context.authHeader;
-    }
-
     if (context.groupHeader) {
       extra['X-Conduit-Group'] = context.groupHeader;
+    }
+
+    try {
+      const resolved = this.identityRuntime.resolveUpstreamHeaders(serverConfig, principal);
+      Object.assign(extra, resolved.headers);
+    } catch (error) {
+      if (error instanceof UpstreamIdentityError) {
+        throw error;
+      }
+      throw new UpstreamIdentityError(String(error instanceof Error ? error.message : error));
+    }
+
+    // Default: do NOT forward the client's Authorization header upstream.
+    // The bearer presented to Conduit (admin key, gateway JWT, API key) is a
+    // gateway-scoped credential — leaking it to a third-party MCP server is
+    // a credential exfiltration risk. Operators who genuinely want pass-through
+    // must opt in per server via `forward_authorization: true`.
+    if (
+      context.authHeader &&
+      !serverConfig.upstream_auth &&
+      serverConfig.forward_authorization === true &&
+      extra['Authorization'] === undefined
+    ) {
+      extra['Authorization'] = context.authHeader;
     }
 
     return extra;
@@ -897,5 +1442,9 @@ export class RequestPipeline {
 
   getInflightTracker(): InflightTracker {
     return this.inflightTracker;
+  }
+
+  private getProfileServerIdSet(profileId: string): Set<string> {
+    return new Set(resolveConnectProfile(this.config, profileId).servers.map((server) => server.id));
   }
 }

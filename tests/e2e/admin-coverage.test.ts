@@ -5,6 +5,9 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { setup, teardown, type E2eTestContext } from './setup.js';
+import { ConduitGateway } from '../../src/gateway/gateway.js';
+import type { ConduitGatewayConfig } from '../../src/config/types.js';
+import { resetMetrics } from '../../src/observability/metrics.js';
 
 async function adminRequest(
   app: E2eTestContext['app'],
@@ -40,6 +43,61 @@ describe('Admin — readyz probe', () => {
     const res = await adminRequest(ctx.app, 'GET', '/readyz');
     const body = await res.json() as { ready: boolean };
     expect(typeof body.ready).toBe('boolean');
+  });
+});
+
+describe('Admin — degraded probes after failed startup refresh', () => {
+  let gateway: ConduitGateway;
+  let app: ReturnType<ConduitGateway['createApp']>;
+
+  beforeEach(async () => {
+    resetMetrics();
+
+    const config: ConduitGatewayConfig = {
+      gateway: { port: 0, host: '127.0.0.1' },
+      router: {
+        namespace_strategy: 'none',
+        health_check: {
+          enabled: false,
+          interval_seconds: 60,
+          timeout_ms: 1000,
+          unhealthy_threshold: 3,
+          healthy_threshold: 1,
+        },
+        load_balancing: 'round-robin',
+      },
+      servers: [{ id: 'broken-server', url: 'http://127.0.0.1:1', cache: { default_ttl: 0 } }],
+      cache: { enabled: false, l1: { max_entries: 100, max_entry_size_kb: 64 } },
+      tenant_isolation: { enabled: false, header: 'Authorization' },
+      observability: { log_args: false, log_responses: false, redact_fields: [], retention_days: 1, db_path: ':memory:' },
+      metrics: { enabled: false, port: 0 },
+    };
+
+    gateway = new ConduitGateway(config);
+    await gateway.initialize();
+    app = gateway.createApp();
+  });
+
+  afterEach(async () => {
+    await gateway.stop();
+  });
+
+  it('GET /conduit/health returns 503 with degraded status', async () => {
+    const res = await app.request('/conduit/health');
+    expect(res.status).toBe(503);
+    const body = await res.json() as { status: string; backends: Array<{ id: string; healthy: boolean }> };
+    expect(body.status).toBe('degraded');
+    expect(body.backends).toHaveLength(1);
+    expect(body.backends[0]?.id).toBe('broken-server');
+    expect(body.backends[0]?.healthy).toBe(false);
+  });
+
+  it('GET /conduit/readyz returns 503 with ready=false', async () => {
+    const res = await app.request('/conduit/readyz');
+    expect(res.status).toBe(503);
+    const body = await res.json() as { ready: boolean; backends_healthy: boolean };
+    expect(body.ready).toBe(false);
+    expect(body.backends_healthy).toBe(false);
   });
 });
 
@@ -232,6 +290,49 @@ describe('Admin — servers', () => {
     const body = await res.json() as { count: number; inflight: unknown[] };
     expect(typeof body.count).toBe('number');
     expect(Array.isArray(body.inflight)).toBe(true);
+  });
+
+  // ── Audit Sprint 3 #3 — replica/server URL credential leak ───────────────
+  describe('GET /conduit/servers credential redaction (audit Sprint 3 #3)', () => {
+    it('redacts username/password embedded in the server URL', async () => {
+      const info = ctx.gateway.getRegistry().getServerInfo('test-server');
+      expect(info).toBeTruthy();
+      const originalUrl = info!.config.url;
+      info!.config.url = originalUrl.replace('http://', 'http://alice:s3cret@');
+
+      const res = await adminRequest(ctx.app, 'GET', '/servers');
+      expect(res.status).toBe(200);
+      const body = await res.json() as { servers: Array<{ url: string }> };
+      const url = body.servers[0]?.url ?? '';
+      expect(url).not.toContain('s3cret');
+      expect(url).not.toContain('alice:s3cret');
+      expect(url).toContain('***');
+
+      info!.config.url = originalUrl;
+    });
+
+    it('redacts replica URLs as well', async () => {
+      const info = ctx.gateway.getRegistry().getServerInfo('test-server');
+      if (!info || !info.replicas[0]) return;
+      const originalReplicaUrl = info.replicas[0].url;
+      info.replicas[0].url = 'https://replica:supersecret@replica.internal/mcp';
+
+      const res = await adminRequest(ctx.app, 'GET', '/servers');
+      const body = await res.json() as { servers: Array<{ replicas: Array<{ url: string }> }> };
+      const replicaUrl = body.servers[0]?.replicas[0]?.url ?? '';
+      expect(replicaUrl).not.toContain('supersecret');
+      expect(replicaUrl).toContain('***');
+
+      info.replicas[0].url = originalReplicaUrl;
+    });
+
+    it('non-credentialed URLs pass through unchanged', async () => {
+      const res = await adminRequest(ctx.app, 'GET', '/servers');
+      const body = await res.json() as { servers: Array<{ url: string }> };
+      const url = body.servers[0]?.url ?? '';
+      expect(url).toMatch(/^https?:\/\//);
+      expect(url).not.toContain('***');
+    });
   });
 });
 

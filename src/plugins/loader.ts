@@ -3,8 +3,31 @@
  * Valide que chaque module exporté implémente l'interface ConduitPlugin.
  */
 
-import { resolve } from 'node:path';
+import { realpathSync } from 'node:fs';
+import { resolve, sep } from 'node:path';
 import type { PluginConfig, ConduitPlugin, HookName } from './types.js';
+
+/**
+ * Default directory plugins must live inside (resolved against CWD).
+ *
+ * Restricting to a single directory turns "anywhere under the project"
+ * into an explicit allowlist. Without it, a compromised npm dependency
+ * could be registered as a plugin via the YAML config and execute with
+ * full gateway privileges (Redis, SQLite, secrets) — battle-test #4.
+ *
+ * Operators who genuinely need plugins outside this directory must opt
+ * out explicitly via PluginLoadOptions.allowedDirs.
+ */
+const DEFAULT_ALLOWED_DIR = 'plugins';
+
+/**
+ * Test seam: lets the test suite append additional allowed directories
+ * without rewriting every loadPlugins() call. Production code never sets
+ * this; tests reset it in afterEach.
+ */
+let testAllowedDirs: string[] = [];
+export function _setTestAllowedDirs(dirs: string[]): void { testAllowedDirs = dirs; }
+export function _resetTestAllowedDirs(): void { testAllowedDirs = []; }
 
 const VALID_HOOKS: Set<string> = new Set([
   'before:request',
@@ -14,16 +37,33 @@ const VALID_HOOKS: Set<string> = new Set([
   'before:response',
 ]);
 
+export interface PluginLoadOptions {
+  /**
+   * Allowlist of directories under which plugin files must live (resolved
+   * against CWD). When omitted, defaults to `./plugins`. Pass an empty
+   * array to disable the allowlist (NOT recommended — operators must
+   * understand they are accepting any path under CWD).
+   */
+  allowedDirs?: string[];
+}
+
 /**
  * Charge les plugins depuis les chemins configurés.
  * Retourne les plugins validés. Les plugins invalides sont loggés et ignorés.
  */
-export async function loadPlugins(configs: PluginConfig[]): Promise<ConduitPlugin[]> {
+export async function loadPlugins(
+  configs: PluginConfig[],
+  options: PluginLoadOptions = {},
+): Promise<ConduitPlugin[]> {
   const plugins: ConduitPlugin[] = [];
+  const allowedDirs = [
+    ...(options.allowedDirs ?? [DEFAULT_ALLOWED_DIR]),
+    ...testAllowedDirs,
+  ];
 
   for (const config of configs) {
     try {
-      const plugin = await loadSinglePlugin(config);
+      const plugin = await loadSinglePlugin(config, allowedDirs);
       plugins.push(plugin);
       console.log(`[Conduit] Plugin "${config.name}" loaded (hooks: ${config.hooks.join(', ')})`);
     } catch (error) {
@@ -37,7 +77,29 @@ export async function loadPlugins(configs: PluginConfig[]): Promise<ConduitPlugi
   return plugins;
 }
 
-async function loadSinglePlugin(config: PluginConfig): Promise<ConduitPlugin> {
+function isUnderAnyAllowedDir(realPath: string, allowedDirs: string[]): boolean {
+  if (allowedDirs.length === 0) return true; // explicit opt-out
+  for (const dir of allowedDirs) {
+    const root = resolve(process.cwd(), dir);
+    // The plugin path was symlink-resolved (realpathSync) before reaching us.
+    // Resolve symlinks for the allowed root too so comparisons survive
+    // /tmp → /private/tmp style aliases on macOS.
+    let realRoot: string;
+    try {
+      realRoot = realpathSync(root);
+    } catch {
+      realRoot = root;
+    }
+    const rootWithSep = realRoot.endsWith(sep) ? realRoot : realRoot + sep;
+    if (realPath === realRoot || realPath.startsWith(rootWithSep)) return true;
+  }
+  return false;
+}
+
+async function loadSinglePlugin(
+  config: PluginConfig,
+  allowedDirs: string[],
+): Promise<ConduitPlugin> {
   // Valider les hooks avant le chargement
   for (const hook of config.hooks) {
     if (!VALID_HOOKS.has(hook)) {
@@ -52,17 +114,40 @@ async function loadSinglePlugin(config: PluginConfig): Promise<ConduitPlugin> {
 
   // Security: block dangerous paths (Unix + Windows system directories)
   const resolved = resolve(modulePath);
+  // Resolve symlinks so that a legitimate-looking path inside CWD cannot
+  // redirect the loader to /etc or another protected prefix.
+  let realResolved: string;
+  try {
+    realResolved = realpathSync(resolved);
+  } catch {
+    // Path does not exist yet — fall back to the lexical resolve; the
+    // subsequent dynamic import() will fail with a clearer error.
+    realResolved = resolved;
+  }
   const BLOCKED_PREFIXES = process.platform === 'win32'
     ? ['C:\\Windows\\', 'C:\\Program Files\\', 'C:\\ProgramData\\']
     : ['/etc/', '/root/', '/proc/', '/sys/', '/dev/'];
-  const normalizedResolved = resolved.toLowerCase();
+  const candidates = [resolved.toLowerCase(), realResolved.toLowerCase()];
   for (const blocked of BLOCKED_PREFIXES) {
-    if (normalizedResolved.startsWith(blocked.toLowerCase())) {
+    const blockedLower = blocked.toLowerCase();
+    if (candidates.some((c) => c.startsWith(blockedLower))) {
       throw new Error(`Plugin path "${config.path}" points to a blocked system directory (${blocked})`);
     }
   }
-  if (config.path.includes('..') && !resolved.startsWith(process.cwd())) {
+  if (config.path.includes('..') && !realResolved.startsWith(process.cwd())) {
     throw new Error(`Plugin path "${config.path}" contains path traversal outside the project`);
+  }
+
+  // Allowlist enforcement — plugins must live inside one of the configured
+  // directories. Without this, ANY file under CWD (including a compromised
+  // node_modules entry) could be registered as a plugin via YAML config and
+  // execute arbitrary code with full gateway privileges.
+  if (!isUnderAnyAllowedDir(realResolved, allowedDirs)) {
+    throw new Error(
+      `Plugin path "${config.path}" is outside the allowed plugin directories ` +
+      `(${allowedDirs.length === 0 ? '<none>' : allowedDirs.join(', ')}). ` +
+      'Place the plugin under one of these directories or extend the allowlist explicitly.',
+    );
   }
 
   // Dynamic import

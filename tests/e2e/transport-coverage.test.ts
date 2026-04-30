@@ -42,15 +42,21 @@ describe('POST /mcp/:serverId — body validation', () => {
     expect(body.error.code).toBe(-32600); // INVALID_REQUEST
   });
 
-  it('returns 400 for JSON array with invalid JSON-RPC messages', async () => {
-    // Valid JSON array but messages inside fail JSON-RPC parsing
+  it('returns per-message error responses for invalid messages in a batch', async () => {
+    // Spec-compliant: a batch of non-objects yields one Invalid Request
+    // response per entry rather than aborting the whole request.
     const res = await ctx.app.request('/mcp/test-server', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: '[1, 2, 3]',
     });
-    // Array of non-objects — parseJsonRpc returns null
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(200);
+    const body = await res.json() as Array<{ id: unknown; error?: { code: number } }>;
+    expect(Array.isArray(body)).toBe(true);
+    expect(body).toHaveLength(3);
+    for (const entry of body) {
+      expect(entry.error?.code).toBe(-32600);
+    }
   });
 
   it('returns 413 when Content-Length header exceeds 10MB', async () => {

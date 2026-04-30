@@ -18,6 +18,8 @@ export interface L2CacheStats {
   hits: number;
   misses: number;
   writes: number;
+  /** Writes skipped by the in-flight coalesce window (audit Sprint 3 #7). */
+  writes_coalesced: number;
   errors: number;
   connected: boolean;
 }
@@ -33,7 +35,27 @@ export class RedisCacheStore {
   private _hits = 0;
   private _misses = 0;
   private _writes = 0;
+  private _writesCoalesced = 0;
   private _errors = 0;
+
+  /**
+   * Audit Sprint 3 #7 — L2 stampede write deduplication.
+   *
+   * Even with single-flight at the upstream layer, all coalesced callers
+   * still race to `set()` the same key with the same payload. Without
+   * deduping, a 50-way concurrent miss yields 50 Redis writes (and 50× the
+   * downstream traffic). We track the last successful write per key and skip
+   * subsequent writes that arrive within the coalesce window — the first
+   * write was identical (single upstream call) so duplicates are safe to
+   * drop.
+   *
+   * The window is short: just enough to absorb the burst from a single
+   * stampede, not so long that it dampens legitimate refreshes.
+   */
+  private readonly recentWrites = new Map<string, number>();
+  private static readonly WRITE_COALESCE_WINDOW_MS = 200;
+  /** Cap to keep the dedup map from growing unbounded under churn. */
+  private static readonly RECENT_WRITES_MAX = 4096;
 
   constructor(
     redisUrl: string,
@@ -123,6 +145,7 @@ export class RedisCacheStore {
   /**
    * Stocke une entrée dans le cache L2.
    * Fire-and-forget : les erreurs sont comptées mais pas propagées.
+   * Coalesces stampede-induced duplicate writes in a short window.
    */
   set(key: string, entry: CacheEntry, ttlSeconds: number): void {
     if (!this.client || !this.connected) return;
@@ -132,9 +155,45 @@ export class RedisCacheStore {
     // Guard taille max
     if (json.length > this.maxEntrySizeBytes) return;
 
+    const now = Date.now();
+    const recent = this.recentWrites.get(key);
+    if (recent !== undefined && recent > now) {
+      // A write for this key landed less than WRITE_COALESCE_WINDOW_MS ago.
+      // The payload was produced by the same single-flight upstream call,
+      // so re-writing it is redundant Redis traffic.
+      this._writesCoalesced++;
+      return;
+    }
+    this.markWrite(key, now);
+
     this._writes++;
     this.client.set(this.prefix(key), json, { EX: Math.max(1, Math.ceil(ttlSeconds)) })
       .catch(() => { this._errors++; });
+  }
+
+  /**
+   * Records a write timestamp and prunes the in-memory dedup map to keep it
+   * bounded. Pruning expires entries are removed lazily here rather than via
+   * a background timer.
+   */
+  private markWrite(key: string, now: number): void {
+    const expiresAt = now + RedisCacheStore.WRITE_COALESCE_WINDOW_MS;
+    this.recentWrites.set(key, expiresAt);
+
+    if (this.recentWrites.size > RedisCacheStore.RECENT_WRITES_MAX) {
+      // Remove every expired entry; if still over the cap, drop the oldest
+      // (insertion-order) until we are under the limit. Map iteration is
+      // O(n) so this only fires when the cap is exceeded.
+      for (const [k, v] of this.recentWrites) {
+        if (v <= now) this.recentWrites.delete(k);
+        if (this.recentWrites.size <= RedisCacheStore.RECENT_WRITES_MAX) break;
+      }
+      while (this.recentWrites.size > RedisCacheStore.RECENT_WRITES_MAX) {
+        const firstKey = this.recentWrites.keys().next().value;
+        if (firstKey === undefined) break;
+        this.recentWrites.delete(firstKey);
+      }
+    }
   }
 
   /** Supprime une clé spécifique. */
@@ -171,6 +230,43 @@ export class RedisCacheStore {
     return deleted;
   }
 
+  /**
+   * Supprime toutes les entrées appartenant à un outil donné sur un serveur.
+   * Scan+inspect est utilisé ici car l'invalidation destructive est rare.
+   */
+  async deleteByTool(toolName: string, serverId: string): Promise<number> {
+    if (!this.client || !this.connected) return 0;
+
+    let deleted = 0;
+    try {
+      for await (const keys of this.client.scanIterator({
+        MATCH: `${this.keyPrefix}*`,
+        COUNT: 100,
+      })) {
+        for (const key of keys) {
+          const raw = await this.client.get(key);
+          if (!raw) continue;
+
+          let entry: CacheEntry;
+          try {
+            entry = JSON.parse(raw) as CacheEntry;
+          } catch {
+            this._errors++;
+            continue;
+          }
+
+          if (entry.toolName === toolName && entry.serverId === serverId) {
+            deleted += await this.client.del(key);
+          }
+        }
+      }
+    } catch {
+      this._errors++;
+    }
+
+    return deleted;
+  }
+
   /** Vide tout le cache L2 (toutes les clés sous le prefix). */
   async flush(): Promise<number> {
     return this.deleteByPattern('*');
@@ -182,6 +278,7 @@ export class RedisCacheStore {
       hits: this._hits,
       misses: this._misses,
       writes: this._writes,
+      writes_coalesced: this._writesCoalesced,
       errors: this._errors,
       connected: this.connected,
     };

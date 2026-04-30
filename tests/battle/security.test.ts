@@ -536,6 +536,32 @@ describe('rate limit — X-Forwarded-For spoofing', () => {
     // If X-Forwarded-For were used for client ID, all would pass.
     expect(rateLimitedCount).toBeGreaterThan(0);
   });
+
+  it('X-Forwarded-For does not create distinct anonymous clients when auth is disabled', async () => {
+    await setupGateway({
+      auth: undefined,
+      rate_limits: {
+        enabled: true,
+        backend: 'memory',
+        per_client: { requests_per_minute: 2 },
+      },
+    });
+
+    let rateLimitedCount = 0;
+    for (let i = 0; i < 5; i++) {
+      const { body } = await sendJson<{ error?: { message?: string } }>(
+        app,
+        'sec-server',
+        makeToolCall('get_contact', { id: `anon-${i}` }),
+        { 'X-Forwarded-For': `198.51.100.${i}` },
+      );
+      if (body.error?.message?.includes('Rate limit')) {
+        rateLimitedCount++;
+      }
+    }
+
+    expect(rateLimitedCount).toBeGreaterThan(0);
+  });
 });
 
 describe('rate limit — blank client identifier', () => {

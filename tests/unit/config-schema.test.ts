@@ -179,6 +179,84 @@ describe('validateConfig', () => {
       expect(errors.length).toBeGreaterThanOrEqual(3);
     });
   });
+
+  describe('connect.profiles', () => {
+    it('accepts a valid custom connect profile', () => {
+      const errors = validateConfig(makeValidConfig({
+        connect: {
+          profiles: [{
+            id: 'sales',
+            server_ids: ['test-server'],
+          }],
+        },
+      }));
+      expect(errors.filter((e) => e.path.startsWith('connect.profiles'))).toHaveLength(0);
+    });
+
+    it('rejects duplicate connect profile IDs', () => {
+      const errors = validateConfig(makeValidConfig({
+        connect: {
+          profiles: [
+            { id: 'sales', server_ids: ['test-server'] },
+            { id: 'sales', server_ids: ['test-server'] },
+          ],
+        },
+      }));
+      expect(errors.some((e) => e.path === 'connect.profiles[1].id')).toBe(true);
+    });
+
+    it('rejects unknown server IDs inside a connect profile', () => {
+      const errors = validateConfig(makeValidConfig({
+        connect: {
+          profiles: [{
+            id: 'sales',
+            server_ids: ['unknown-server'],
+          }],
+        },
+      }));
+      expect(errors.some((e) => e.path === 'connect.profiles[0].server_ids[0]')).toBe(true);
+    });
+  });
+
+  describe('connect.registry', () => {
+    it('accepts a valid registry configuration override', () => {
+      const errors = validateConfig(makeValidConfig({
+        connect: {
+          registry: {
+            base_url: 'https://registry.modelcontextprotocol.io',
+            cache_ttl_seconds: 900,
+            page_size: 50,
+            max_pages: 4,
+            latest_only: true,
+          },
+        },
+      }));
+      expect(errors.filter((e) => e.path.startsWith('connect.registry'))).toHaveLength(0);
+    });
+
+    it('accepts max_pages=0 to follow the full official registry pagination', () => {
+      const errors = validateConfig(makeValidConfig({
+        connect: {
+          registry: {
+            base_url: 'https://registry.modelcontextprotocol.io',
+            max_pages: 0,
+          },
+        },
+      }));
+      expect(errors.filter((e) => e.path.startsWith('connect.registry'))).toHaveLength(0);
+    });
+
+    it('rejects an invalid registry base_url', () => {
+      const errors = validateConfig(makeValidConfig({
+        connect: {
+          registry: {
+            base_url: 'ftp://registry.modelcontextprotocol.io',
+          },
+        },
+      }));
+      expect(errors.some((e) => e.path === 'connect.registry.base_url')).toBe(true);
+    });
+  });
 });
 
 describe('mergeWithDefaults', () => {
@@ -204,5 +282,72 @@ describe('mergeWithDefaults', () => {
       servers: [{ id: 'test', url: 'http://localhost/mcp', cache: { default_ttl: 120 } }],
     });
     expect(config.servers[0]?.cache.default_ttl).toBe(120);
+  });
+
+  it('normalise la configuration connect.profiles', () => {
+    const config = mergeWithDefaults({
+      servers: [{ id: 'test', url: 'http://localhost/mcp' }],
+      connect: {
+        profiles: [{
+          id: 'sales',
+          label: 'Sales',
+          description: 'Only sales',
+          server_ids: ['test'],
+        }],
+      },
+    });
+
+    expect(config.connect?.profiles?.[0]).toEqual({
+      id: 'sales',
+      label: 'Sales',
+      description: 'Only sales',
+      server_ids: ['test'],
+    });
+  });
+
+  it('normalise la configuration connect.registry', () => {
+    const config = mergeWithDefaults({
+      connect: {
+        registry: {
+          base_url: 'https://registry.modelcontextprotocol.io',
+          cache_ttl_seconds: 900,
+          page_size: 50,
+          max_pages: 4,
+          latest_only: false,
+        },
+      },
+    });
+
+    expect(config.connect?.registry).toEqual({
+      base_url: 'https://registry.modelcontextprotocol.io',
+      cache_ttl_seconds: 900,
+      page_size: 50,
+      max_pages: 4,
+      latest_only: false,
+    });
+  });
+
+  it('normalise max_pages=0 pour une sync complète du registry', () => {
+    const config = mergeWithDefaults({
+      connect: {
+        registry: {
+          max_pages: 0,
+        },
+      },
+    });
+
+    expect(config.connect?.registry).toEqual({
+      max_pages: 0,
+    });
+  });
+
+  it('préserve admin.allow_private_networks quand il est explicitement activé', () => {
+    const config = mergeWithDefaults({
+      admin: {
+        allow_private_networks: true,
+      },
+    });
+
+    expect(config.admin?.allow_private_networks).toBe(true);
   });
 });

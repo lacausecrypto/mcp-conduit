@@ -10,6 +10,8 @@
  *   CONDUIT_DB_PATH       — SQLite log database path (overrides observability.db_path)
  *   CONDUIT_METRICS_PORT  — Prometheus metrics port (overrides metrics.port)
  *   CONDUIT_ADMIN_KEY     — Admin API bearer token (overrides admin.key)
+ *   CONDUIT_IDENTITY_DB_PATH — SQLite identity database path (overrides identity.db_path)
+ *   CONDUIT_GOVERNANCE_DB_PATH — SQLite governance database path (overrides governance.db_path)
  *   CONDUIT_LOG_ARGS      — "false" to disable argument logging (overrides observability.log_args)
  *   CONDUIT_TLS_ENABLED   — "true"/"false" (overrides gateway.tls.enabled)
  *   CONDUIT_TLS_CERT      — path to TLS certificate PEM (overrides gateway.tls.cert_path)
@@ -19,7 +21,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { load as yamlLoad } from 'js-yaml';
+import { safeYamlLoad } from '../utils/yaml-safe.js';
 import { mergeWithDefaults, validateConfig, formatConfigErrors } from './schema.js';
 import type { ConduitGatewayConfig } from './types.js';
 
@@ -41,7 +43,7 @@ export function loadConfig(configPath: string): ConduitGatewayConfig {
 
   let parsed: unknown;
   try {
-    parsed = yamlLoad(rawContent);
+    parsed = safeYamlLoad(rawContent);
   } catch (error) {
     // js-yaml includes line/column in the error message for malformed YAML
     throw new Error(`Erreur de parsing YAML dans ${absolutePath}\n${String(error)}`);
@@ -132,6 +134,35 @@ function applyEnvOverrides(config: ConduitGatewayConfig): void {
     config.admin = { ...config.admin, key: adminKey };
   }
 
+  const identityDbPath = process.env['CONDUIT_IDENTITY_DB_PATH'];
+  if (identityDbPath !== undefined) {
+    config.identity = {
+      enabled: true,
+      default_workspace_id: config.identity?.default_workspace_id ?? 'default',
+      workspaces: config.identity?.workspaces ?? [],
+      db_path: identityDbPath,
+    };
+  }
+
+  const governanceDbPath = process.env['CONDUIT_GOVERNANCE_DB_PATH'];
+  if (governanceDbPath !== undefined) {
+    config.governance = {
+      enabled: true,
+      registry_default_action: config.governance?.registry_default_action ?? 'allow',
+      role_bindings: config.governance?.role_bindings ?? [],
+      tool_policies: config.governance?.tool_policies ?? [],
+      registry_policies: config.governance?.registry_policies ?? [],
+      quotas: config.governance?.quotas ?? { workspaces: [] },
+      approvals: config.governance?.approvals ?? {
+        enabled: true,
+        ttl_seconds: 3600,
+        required_roles: ['owner', 'admin', 'approver'],
+        allow_self_approval: false,
+      },
+      db_path: governanceDbPath,
+    };
+  }
+
   const logArgs = process.env['CONDUIT_LOG_ARGS'];
   if (logArgs !== undefined) {
     config.observability.log_args = logArgs.toLowerCase() !== 'false';
@@ -180,6 +211,7 @@ function applyEnvOverrides(config: ConduitGatewayConfig): void {
 const KNOWN_TOP_LEVEL_KEYS = new Set([
   'gateway', 'router', 'servers', 'cache', 'auth', 'acl',
   'rate_limits', 'tenant_isolation', 'observability', 'metrics',
+  'connect', 'identity', 'governance',
   'admin', 'guardrails', 'plugins', 'discovery',
 ]);
 

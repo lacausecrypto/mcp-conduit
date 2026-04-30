@@ -129,7 +129,7 @@ export class ServerRegistry {
         tools: [],
         health: {
           serverId: serverConfig.id,
-          healthy: true,
+          healthy: false,
           latencyMs: 0,
           lastChecked: 0,
           consecutiveFailures: 0,
@@ -140,7 +140,7 @@ export class ServerRegistry {
       });
 
       // Initialisation de la jauge de santé
-      this.metrics.backendHealth.set({ server: serverConfig.id }, 1);
+      this.metrics.backendHealth.set({ server: serverConfig.id }, 0);
     }
   }
 
@@ -213,7 +213,7 @@ export class ServerRegistry {
       tools: [],
       health: {
         serverId: serverConfig.id,
-        healthy: true,
+        healthy: false,
         latencyMs: 0,
         lastChecked: 0,
         consecutiveFailures: 0,
@@ -223,7 +223,7 @@ export class ServerRegistry {
       replicas,
     });
 
-    this.metrics.backendHealth.set({ server: serverConfig.id }, 1);
+    this.metrics.backendHealth.set({ server: serverConfig.id }, 0);
 
     // Fetch tools
     await this.refreshServer(serverConfig.id);
@@ -237,6 +237,13 @@ export class ServerRegistry {
   removeServer(serverId: string): boolean {
     const serverInfo = this.servers.get(serverId);
     if (!serverInfo) return false;
+
+    const client = this.clients.get(serverId) as IMcpClient & { shutdown?: () => Promise<void> } | undefined;
+    if (client?.shutdown) {
+      void client.shutdown().catch((error) => {
+        console.warn(`[Conduit] Failed to stop stdio client for "${serverId}":`, error);
+      });
+    }
 
     this.servers.delete(serverId);
     this.clients.delete(serverId);
@@ -268,6 +275,12 @@ export class ServerRegistry {
       });
 
       if (response.isStream || !response.body) {
+        serverInfo.health = {
+          ...serverInfo.health,
+          healthy: false,
+          lastChecked: Date.now(),
+        };
+        this.metrics.backendHealth.set({ server: serverId }, 0);
         return;
       }
 
@@ -278,11 +291,25 @@ export class ServerRegistry {
 
       if (body.error) {
         console.warn(`[Conduit] Erreur tools/list pour ${serverId} :`, body.error);
+        serverInfo.health = {
+          ...serverInfo.health,
+          healthy: false,
+          lastChecked: Date.now(),
+        };
+        this.metrics.backendHealth.set({ server: serverId }, 0);
         return;
       }
 
       const tools = body.result?.tools ?? [];
       serverInfo.tools = tools;
+      serverInfo.health = {
+        ...serverInfo.health,
+        healthy: true,
+        lastChecked: Date.now(),
+        consecutiveFailures: 0,
+        consecutiveSuccesses: 1,
+      };
+      this.metrics.backendHealth.set({ server: serverId }, 1);
 
       // Mise à jour des annotations
       serverInfo.annotations.clear();
@@ -292,9 +319,26 @@ export class ServerRegistry {
         }
       }
 
+      const primaryReplica = serverInfo.replicas[0];
+      if (primaryReplica) {
+        primaryReplica.health = {
+          ...primaryReplica.health,
+          healthy: true,
+          lastChecked: Date.now(),
+          consecutiveFailures: 0,
+          consecutiveSuccesses: 1,
+        };
+      }
+
       console.log(`[Conduit] Registre mis à jour : ${tools.length} outil(s) pour "${serverId}"`);
     } catch (error) {
       console.warn(`[Conduit] Impossible de récupérer tools/list pour ${serverId} :`, error);
+      serverInfo.health = {
+        ...serverInfo.health,
+        healthy: false,
+        lastChecked: Date.now(),
+      };
+      this.metrics.backendHealth.set({ server: serverId }, 0);
     }
   }
 
@@ -408,9 +452,16 @@ export class ServerRegistry {
         });
       } else {
         // Pour HTTP, utiliser fetch directement
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json',
+        };
+        if (serverConfig?.headers) {
+          Object.assign(headers, serverConfig.headers);
+        }
+
         await fetch(replica.url, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify({ jsonrpc: '2.0', id: 0, method: 'initialize', params: {
             protocolVersion: '2024-11-05',
             clientInfo: { name: 'conduit-health-check', version: '1.0.0' },

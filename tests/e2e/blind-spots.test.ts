@@ -643,6 +643,39 @@ describe('2.1 Cache poisoning — tenant isolation', () => {
     // Backend called exactly 5 times (once per tenant)
     expect(ctx.mockServer.getCallCount('tools/call')).toBe(5);
   });
+
+  it('Two API keys from the same authenticated tenant share the same cache entry', async () => {
+    const shared = await setupTenantIsolated({
+      auth: {
+        method: 'api-key',
+        api_keys: [
+          { key: 'sk-tenant-shared-a', client_id: 'agent-a', tenant_id: 'tenant-shared' },
+          { key: 'sk-tenant-shared-b', client_id: 'agent-b', tenant_id: 'tenant-shared' },
+        ],
+      },
+    });
+
+    try {
+      shared.gateway.getCacheStore().clear();
+      shared.mockServer.resetCallCounts();
+
+      const msg = makeToolCallMessage('get_contact', { id: 'shared-001' });
+
+      const resA = await sendMcpRequest(shared.app, 'test-server', msg, {
+        Authorization: 'Bearer sk-tenant-shared-a',
+      });
+      expect(resA.headers.get('x-conduit-cache-status')).toBe('MISS');
+
+      const resB = await sendMcpRequest(shared.app, 'test-server', msg, {
+        Authorization: 'Bearer sk-tenant-shared-b',
+      });
+      expect(resB.headers.get('x-conduit-cache-status')).toBe('HIT');
+      expect(shared.mockServer.getCallCount('tools/call')).toBe(1);
+    } finally {
+      await shared.mockServer.close();
+      await shared.gateway.stop();
+    }
+  });
 });
 
 // ─── 2.2 Cache invalidation correctness ──────────────────────────────────────
@@ -1169,12 +1202,19 @@ describe('4.1 JSON-RPC compliance', () => {
     expect(body[2]?.error).toBeDefined();
   });
 
-  it('Batch with wrong jsonrpc version → entire batch rejected', async () => {
+  it('Batch with wrong jsonrpc version → per-message Invalid Request (spec-compliant)', async () => {
+    // Per JSON-RPC 2.0 spec, a malformed entry must yield an error response
+    // for that specific entry while valid entries succeed. The gateway used
+    // to reject the entire batch; battle-test #4 corrected this.
     const batch = [
       { jsonrpc: '1.0', id: 1, method: 'tools/list', params: {} },
     ];
     const res = await sendMcpRequest(ctx.app, 'test-server', batch);
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(200);
+    const body = await res.json() as Array<{ id: number | null; error?: { code: number } }>;
+    expect(Array.isArray(body)).toBe(true);
+    expect(body[0]?.error?.code).toBe(-32600);
+    expect(body[0]?.id).toBe(1);
   });
 
   it('Empty batch array → rejected (no messages)', async () => {

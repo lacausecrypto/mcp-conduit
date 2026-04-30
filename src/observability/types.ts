@@ -7,7 +7,7 @@
 export type RequestStatus = 'success' | 'error' | 'cache_hit';
 
 /** Statut du cache pour une requête */
-export type CacheLogStatus = 'HIT' | 'MISS' | 'BYPASS' | 'SKIP';
+export type CacheLogStatus = 'HIT' | 'MISS' | 'BYPASS' | 'SKIP' | 'SKIP_ERROR';
 
 /** Entrée de log structurée pour chaque interaction MCP */
 export interface LogEntry {

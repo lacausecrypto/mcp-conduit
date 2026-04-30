@@ -51,6 +51,7 @@ export async function setupIntegration(options?: {
     servers,
     router: { namespace_strategy: 'prefix' },
     observability: { db_path: ':memory:', retention_days: 1 },
+    admin: { allow_private_networks: true },
   };
 
   if (options?.withL2 && options.redisUrl) {

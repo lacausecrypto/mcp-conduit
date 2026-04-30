@@ -142,9 +142,19 @@ async function authenticateJwt(
       issuer?: string;
       audience?: string | string[];
       clockTolerance?: number;
+      algorithms?: string[];
     } = {
       // Allow 60 seconds of clock skew between issuer and gateway
       clockTolerance: 60,
+      // Explicit algorithm whitelist — rejects "alg: none" and any HS*
+      // variant (symmetric algorithms are not valid for JWKS-based verification
+      // and have historically been abused via key-confusion attacks).
+      algorithms: config.algorithms ?? [
+        'RS256', 'RS384', 'RS512',
+        'PS256', 'PS384', 'PS512',
+        'ES256', 'ES384', 'ES512',
+        'EdDSA',
+      ],
     };
     if (config.issuer !== undefined) verifyOptions.issuer = config.issuer;
     if (config.audience !== undefined) verifyOptions.audience = config.audience;

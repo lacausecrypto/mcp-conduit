@@ -14,6 +14,10 @@ import type { ConduitGatewayConfig } from '../../src/config/types.js';
 /** Minimal valid config — used as baseline for targeted mutations */
 function baseConfig(overrides: Partial<ConduitGatewayConfig> = {}): ConduitGatewayConfig {
   return {
+    // Tests bind to 0.0.0.0 by default, so the admin-key-required check
+    // would refuse the config. The opt-in below acknowledges that test
+    // fixtures intentionally skip admin authentication.
+    admin: { allow_unauthenticated: true },
     gateway: {
       port: 8080,
       host: '0.0.0.0',
@@ -535,6 +539,89 @@ describe('multiple errors collected', () => {
 
   it('returns empty array for completely valid config', () => {
     expect(validateConfig(baseConfig())).toHaveLength(0);
+  });
+});
+
+// ─── admin.key required when bound to a non-loopback host ────────────────────
+
+describe('admin.key requirement (audit High 3.2 #1)', () => {
+  /** baseConfig() opts in to allow_unauthenticated; explicitly drop it here. */
+  function noAdmin(host: string): ConduitGatewayConfig {
+    const cfg = baseConfig({ gateway: { port: 8080, host } });
+    delete (cfg as { admin?: unknown }).admin;
+    return cfg;
+  }
+
+  it('rejects when host is 0.0.0.0 and no admin.key + no opt-in', () => {
+    const errors = validateConfig(noAdmin('0.0.0.0'));
+    expect(hasError(errors, 'admin.key')).toBe(true);
+  });
+
+  it('rejects when host is a public IP and no admin.key', () => {
+    const errors = validateConfig(noAdmin('203.0.113.10'));
+    expect(hasError(errors, 'admin.key')).toBe(true);
+  });
+
+  it('rejects when host is a private LAN IP and no admin.key', () => {
+    const errors = validateConfig(noAdmin('192.168.1.50'));
+    expect(hasError(errors, 'admin.key')).toBe(true);
+  });
+
+  it('accepts when host is 127.0.0.1 (loopback IPv4) with no admin.key', () => {
+    const errors = validateConfig(noAdmin('127.0.0.1'));
+    expect(hasError(errors, 'admin.key')).toBe(false);
+  });
+
+  it('accepts when host is ::1 (loopback IPv6) with no admin.key', () => {
+    const errors = validateConfig(noAdmin('::1'));
+    expect(hasError(errors, 'admin.key')).toBe(false);
+  });
+
+  it('accepts when host is "localhost" with no admin.key', () => {
+    const errors = validateConfig(noAdmin('localhost'));
+    expect(hasError(errors, 'admin.key')).toBe(false);
+  });
+
+  it('accepts when host is in 127.0.0.0/8 (e.g. 127.0.0.5)', () => {
+    const errors = validateConfig(noAdmin('127.0.0.5'));
+    expect(hasError(errors, 'admin.key')).toBe(false);
+  });
+
+  it('accepts when admin.key is set, even on 0.0.0.0', () => {
+    const cfg = baseConfig({ gateway: { port: 8080, host: '0.0.0.0' } });
+    cfg.admin = { key: 'super-secret-key' };
+    const errors = validateConfig(cfg);
+    expect(hasError(errors, 'admin.key')).toBe(false);
+  });
+
+  it('accepts when admin.allow_unauthenticated=true on a non-loopback host', () => {
+    const cfg = baseConfig({ gateway: { port: 8080, host: '0.0.0.0' } });
+    cfg.admin = { allow_unauthenticated: true };
+    const errors = validateConfig(cfg);
+    expect(hasError(errors, 'admin.key')).toBe(false);
+  });
+
+  it('still rejects when admin object exists but is empty (no key, no opt-in)', () => {
+    const cfg = baseConfig({ gateway: { port: 8080, host: '0.0.0.0' } });
+    cfg.admin = {};
+    const errors = validateConfig(cfg);
+    expect(hasError(errors, 'admin.key')).toBe(true);
+  });
+
+  it('still rejects when admin.allow_unauthenticated=false', () => {
+    const cfg = baseConfig({ gateway: { port: 8080, host: '0.0.0.0' } });
+    cfg.admin = { allow_unauthenticated: false };
+    const errors = validateConfig(cfg);
+    expect(hasError(errors, 'admin.key')).toBe(true);
+  });
+
+  it('error message names the actual host and mentions both remediation paths', () => {
+    const errors = validateConfig(noAdmin('10.0.0.5'));
+    const err = errors.find((e) => e.path === 'admin.key');
+    expect(err?.message).toContain('"10.0.0.5"');
+    expect(err?.message).toContain('admin.key');
+    expect(err?.message).toContain('CONDUIT_ADMIN_KEY');
+    expect(err?.message).toContain('admin.allow_unauthenticated');
   });
 });
 

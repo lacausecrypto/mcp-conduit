@@ -152,7 +152,7 @@ export class ConduitRouter {
    */
   getClientForServer(serverId: string): IMcpClient | null {
     const serverInfo = this.registry.getServerInfo(serverId);
-    if (!serverInfo?.health.healthy) return null;
+    if (!serverInfo) return null;
 
     // Pour un accès direct au serveur, utiliser le load balancing
     return this.selectReplica(serverId);

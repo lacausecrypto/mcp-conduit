@@ -171,6 +171,9 @@ describe('Full Pipeline E2E', () => {
         db_path: ':memory:',
       },
       metrics: { enabled: false, port: 0 },
+      admin: {
+        allow_private_networks: true,
+      },
       auth: {
         method: 'api-key',
         api_keys: [

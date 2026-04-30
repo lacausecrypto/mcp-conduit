@@ -69,13 +69,59 @@ describe('Phase 6 — dashboard (no auth)', () => {
     expect(body).toContain('recharts');
   });
 
+  it('response includes a CSP header for the dashboard shell', async () => {
+    const res = await ctx.app.request('/conduit/dashboard', { method: 'GET' });
+    const csp = res.headers.get('content-security-policy') ?? '';
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain('https://unpkg.com');
+    expect(csp).not.toContain("'unsafe-eval'");
+  });
+
+  it('response body does not persist the admin key in localStorage', async () => {
+    const res = await ctx.app.request('/conduit/dashboard', { method: 'GET' });
+    const body = await res.text();
+    expect(body).not.toContain('localStorage');
+    expect(body).not.toContain('conduit-admin-key');
+  });
+
+  it('response body does not depend on in-browser Babel', async () => {
+    const res = await ctx.app.request('/conduit/dashboard', { method: 'GET' });
+    const body = await res.text();
+    expect(body).not.toContain('@babel/standalone');
+    expect(body).not.toContain('text/babel');
+  });
+
   it('response body contains dashboard view identifiers', async () => {
     const res = await ctx.app.request('/conduit/dashboard', { method: 'GET' });
     const body = await res.text();
-    // Navigation items compiled into the bundle
+    // Navigation items and major page sections compiled into the bundle
     expect(body).toContain('Overview');
+    expect(body).toContain('Servers & Cache');
+    expect(body).toContain('Backend Servers');
+    expect(body).toContain('Top Cached Tools');
+    expect(body).toContain('Flush Cache by Server');
+    expect(body).toContain('Access & Limits');
     expect(body).toContain('Rate Limits');
     expect(body).toContain('Access Control');
+    expect(body).toContain('Registry');
+    expect(body).toContain('Registry Library');
+    expect(body).toContain('Official MCP Registry');
+    expect(body).toContain('Operational Filters');
+    expect(body).toContain('Verified Publishers');
+    expect(body).toContain('Trust Score');
+    expect(body).toContain('Runtime Health');
+    expect(body).toContain('Policy Fit');
+    expect(body).toContain('Connect');
+    expect(body).toContain('Settings');
+    expect(body).toContain('Add To Conduit');
+    expect(body).toContain('Configure & Add');
+    expect(body).toContain('Install Flow');
+    expect(body).toContain('Gateway Token');
+    expect(body).toContain('Install in ');
+    expect(body).toContain('Create local install bundle');
+    expect(body).toContain('Create remote handoff');
+    expect(body).toContain('One-click handoff');
+    expect(body).toContain('Reload configuration');
   });
 
   it('GET /conduit/dashboard/* returns 200 (client-side routing catch-all)', async () => {

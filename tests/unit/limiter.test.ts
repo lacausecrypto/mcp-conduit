@@ -127,4 +127,52 @@ describe('SlidingWindowLimiter', () => {
       expect(usage.count).toBe(2);
     });
   });
+
+  // ── Battle-test #1 — unbounded keys / memory leak ─────────────────────────
+  describe('memory bounded under unique-key flood', () => {
+    it('expired buckets are pruned on access (no zombie keys)', () => {
+      const l = new SlidingWindowLimiter();
+      l.consume('one-shot', 5, 100);
+      expect(l.size).toBe(1);
+      // Advance past the window so the timestamp is expired.
+      vi.advanceTimersByTime(150);
+      // Any access through getValid should now drop the empty bucket.
+      l.check('one-shot', 5, 100);
+      expect(l.size).toBe(0);
+    });
+
+    it('hard cap on map size — oldest insertion-order buckets evicted', () => {
+      const l = new SlidingWindowLimiter({ maxBuckets: 100 });
+      for (let i = 0; i < 1_000; i++) {
+        l.consume(`k-${i}`, 100, 60_000);
+      }
+      // Cap is 100; the eviction target is 90% (90), and the loop pushes
+      // back up to 100 by the time it exits. Either way we're bounded.
+      expect(l.size).toBeLessThanOrEqual(100);
+      expect(l.size).toBeGreaterThan(0);
+    });
+
+    it('flood of unique keys does not produce a zombie map at quiet time', () => {
+      const l = new SlidingWindowLimiter();
+      for (let i = 0; i < 5_000; i++) {
+        l.consume(`flood-${i}`, 5, 50);
+      }
+      vi.advanceTimersByTime(60); // past window
+      // Quiet time: no consume() calls, but the next operation that touches
+      // each key would prune it. Simulate by checking each key once.
+      for (let i = 0; i < 5_000; i++) {
+        l.check(`flood-${i}`, 5, 50);
+      }
+      expect(l.size).toBe(0);
+    });
+
+    it('reset resets remaining slots immediately (no stale buckets)', () => {
+      const l = new SlidingWindowLimiter();
+      l.consume('user', 3, 60_000);
+      l.consume('user', 3, 60_000);
+      expect(l.size).toBe(1);
+      l.reset('user');
+      expect(l.size).toBe(0);
+    });
+  });
 });

@@ -675,6 +675,7 @@ Administration API configuration.
 | Field | Type | Default | Env | Description |
 |-------|------|---------|-----|-------------|
 | `admin.key` | `string` |: | `CONDUIT_ADMIN_KEY` | Bearer key protecting all `/conduit/*` endpoints (except `/conduit/health` and `/conduit/dashboard`). If absent, the admin API is open. **Always set in production** |
+| `admin.allow_private_networks` | `boolean` | `false` |  | Explicit opt-in allowing dynamic admin imports/registrations to target private or loopback upstream URLs. Keep disabled in production to preserve SSRF protections |
 
 The key comparison uses `timingSafeEqual` to prevent timing attacks.
 
@@ -683,6 +684,7 @@ The key comparison uses `timingSafeEqual` to prevent timing attacks.
 ```yaml
 admin:
   key: ""  # Leave empty here, use CONDUIT_ADMIN_KEY environment variable
+  allow_private_networks: false
 ```
 
 ---

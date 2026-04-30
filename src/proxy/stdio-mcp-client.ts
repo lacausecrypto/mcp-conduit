@@ -9,6 +9,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { ServerConfig } from '../config/types.js';
 import type { CircuitBreaker } from '../router/circuit-breaker.js';
+import { buildManagedRuntimeLaunchSpec } from '../runtime/managed.js';
 import type { IMcpClient } from './mcp-client-interface.js';
 import type { UpstreamResponse, UpstreamRequestOptions } from './mcp-client.js';
 
@@ -17,6 +18,27 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
 /** Délai de grâce avant SIGKILL après SIGTERM (5 secondes) */
 const KILL_GRACE_MS = 5_000;
+
+/**
+ * Si le processus enfant exit avant ce délai, on considère que le spawn lui-même
+ * a échoué (ENOENT, dépendance manquante, crash immédiat sur stdin) et on
+ * incrémente le compteur de respawns rapides.
+ */
+const FAST_FAILURE_THRESHOLD_MS = 2_000;
+
+/**
+ * Délai de backoff initial après un crash rapide. Doublé à chaque échec
+ * consécutif jusqu'à `MAX_RESPAWN_BACKOFF_MS`.
+ */
+const RESPAWN_BACKOFF_BASE_MS = 250;
+const MAX_RESPAWN_BACKOFF_MS = 30_000;
+
+/**
+ * Au-delà de ce nombre d'échecs rapides consécutifs, on refuse définitivement
+ * de re-spawner jusqu'à ce qu'un health-check / force-reset soit appelé (via
+ * l'API admin du circuit-breaker associé).
+ */
+const MAX_CONSECUTIVE_FAST_FAILURES = 10;
 
 /**
  * Requête en attente de réponse sur stdout.
@@ -45,6 +67,15 @@ export class StdioMcpClient implements IMcpClient {
 
   /** Compteur auto-incrémenté pour les IDs JSON-RPC quand le message n'en a pas */
   private nextId = 1;
+
+  /** Horodatage du dernier spawn — utilisé pour détecter les crashs rapides */
+  private lastSpawnAt = 0;
+
+  /** Nombre d'échecs rapides consécutifs (exit < FAST_FAILURE_THRESHOLD_MS après spawn) */
+  private consecutiveFastFailures = 0;
+
+  /** Date à partir de laquelle un re-spawn est à nouveau autorisé (cooldown) */
+  private nextRespawnAllowedAt = 0;
 
   constructor(server: ServerConfig) {
     this.server = server;
@@ -108,9 +139,20 @@ export class StdioMcpClient implements IMcpClient {
 
   // ─── Lifecycle ───────────────────────────────────────────────────────
 
-  /** Arrête proprement le processus enfant. */
+  /**
+   * Arrête proprement le processus enfant.
+   *
+   * Audit 3.1#9 — rejette immédiatement toutes les requêtes en attente avec
+   * une erreur claire pour qu'aucune requête in-flight ne reste suspendue
+   * pendant que le processus est tué (sinon les callers attendent l'expiration
+   * de leur propre timeout, ou pire l'event `exit` qui peut être rebondi par
+   * le grace SIGKILL).
+   */
   async shutdown(): Promise<void> {
     this.stopped = true;
+    this.rejectAllPending(
+      new Error(`Stdio client for "${this.server.id}" has been shut down`),
+    );
     await this.killProcess();
   }
 
@@ -124,6 +166,17 @@ export class StdioMcpClient implements IMcpClient {
   private async _doForward(options: UpstreamRequestOptions): Promise<UpstreamResponse> {
     const proc = this.ensureProcess();
     const message = options.body as Record<string, unknown>;
+    const isNotification = isMcpNotification(message);
+
+    if (isNotification) {
+      await writeStdioMessage(proc, JSON.stringify(message) + '\n');
+      return {
+        body: null,
+        status: 202,
+        headers: {},
+        isStream: false,
+      };
+    }
 
     // S'assurer qu'il y a un ID pour corréler la réponse
     const rawId = message['id'];
@@ -146,16 +199,22 @@ export class StdioMcpClient implements IMcpClient {
 
       // Écrire le message JSON-RPC sur stdin, terminé par un saut de ligne
       const data = JSON.stringify(outgoing) + '\n';
-      if (!proc.stdin?.write(data)) {
-        // Backpressure — attendre le drain
-        proc.stdin?.once('drain', () => { /* written */ });
-      }
+      writeStdioMessage(proc, data).catch((error) => {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      });
     });
   }
 
   /**
    * S'assure que le processus enfant est lancé.
    * Le spawne paresseusement si nécessaire.
+   *
+   * Audit 3.1#8 — si le binaire crashe immédiatement à chaque spawn, on
+   * applique un backoff exponentiel pour éviter le fork-bomb. Au-delà de
+   * `MAX_CONSECUTIVE_FAST_FAILURES`, on refuse complètement le respawn
+   * jusqu'à ce qu'une intervention manuelle ait lieu (circuit breaker reset).
    */
   private ensureProcess(): ChildProcess {
     if (this.process && this.process.exitCode === null) {
@@ -166,11 +225,26 @@ export class StdioMcpClient implements IMcpClient {
       throw new Error(`Stdio client for "${this.server.id}" has been shut down`);
     }
 
-    const command = this.server.command;
-    const args = this.server.args ?? [];
-    const env = this.server.env
+    // Respawn budget — block fork-bomb on broken commands.
+    const now = Date.now();
+    if (this.consecutiveFastFailures >= MAX_CONSECUTIVE_FAST_FAILURES) {
+      throw new Error(
+        `Stdio process "${this.server.id}" failed to start ${this.consecutiveFastFailures} times in a row — refusing to respawn. Reset the circuit breaker once the underlying issue is fixed.`,
+      );
+    }
+    if (now < this.nextRespawnAllowedAt) {
+      const waitMs = this.nextRespawnAllowedAt - now;
+      throw new Error(
+        `Stdio process "${this.server.id}" is in respawn cooldown (${waitMs}ms remaining after ${this.consecutiveFastFailures} fast failure${this.consecutiveFastFailures === 1 ? '' : 's'})`,
+      );
+    }
+
+    const managedLaunch = buildManagedRuntimeLaunchSpec(this.server);
+    const command = managedLaunch?.command ?? this.server.command;
+    const args = managedLaunch?.args ?? this.server.args ?? [];
+    const env = managedLaunch?.env ?? (this.server.env
       ? { ...process.env, ...this.server.env }
-      : process.env;
+      : process.env);
 
     if (!command) {
       throw new Error(
@@ -181,9 +255,22 @@ export class StdioMcpClient implements IMcpClient {
     // On Windows, commands like 'npx' are actually 'npx.cmd' batch files.
     // spawn() can't resolve them without shell:true on Windows.
     const isWindows = process.platform === 'win32';
+
+    // Reject shell metacharacters when we hand the command to cmd.exe — a
+    // malicious config value like "npx & rm -rf %USERPROFILE%" would otherwise
+    // be chained by the shell. Args are passed by spawn() as a single
+    // quoted string on Windows, so they are guarded the same way.
+    if (isWindows) {
+      assertNoShellMetacharacters(command, `stdio server "${this.server.id}" command`);
+      for (const arg of args) {
+        assertNoShellMetacharacters(arg, `stdio server "${this.server.id}" argument`);
+      }
+    }
+
     const proc = spawn(command, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       env,
+      ...(managedLaunch?.cwd ? { cwd: managedLaunch.cwd } : {}),
       shell: isWindows,
       // Prevent shell window flash on Windows
       ...(isWindows ? { windowsHide: true } : {}),
@@ -191,6 +278,7 @@ export class StdioMcpClient implements IMcpClient {
 
     this.process = proc;
     this.stdoutBuffer = '';
+    this.lastSpawnAt = Date.now();
 
     // Lecture ligne par ligne sur stdout
     proc.stdout?.on('data', (chunk: Buffer) => {
@@ -212,23 +300,98 @@ export class StdioMcpClient implements IMcpClient {
         `[Conduit] stdio process exited for "${this.server.id}" (code=${code}, signal=${signal})`,
       );
       this.process = null;
+      // Audit 3.1#8 — un kill par signal externe (SIGTERM/SIGKILL/etc.) ne
+      // compte pas comme un crash rapide : c'est l'opérateur ou le système
+      // qui a tué le process intentionnellement, pas un binaire défaillant.
+      const wasExternalSignal = signal !== null;
+      this.recordExit({ wasExternalSignal });
 
       // Rejeter toutes les requêtes en attente
-      for (const [id, req] of this.pending) {
-        clearTimeout(req.timer);
-        req.reject(new Error(
-          `Stdio process "${this.server.id}" exited unexpectedly (code=${code})`,
-        ));
-        this.pending.delete(id);
-      }
+      this.rejectAllPending(new Error(
+        `Stdio process "${this.server.id}" exited unexpectedly (code=${code}, signal=${signal})`,
+      ));
     });
 
+    // Audit 3.1#9 — un `error` event peut être émis sans `exit` (ENOENT, EACCES,
+    // permissions, binary missing). On rejette les pending *et* on enregistre
+    // l'échec pour le backoff (cf. Audit 3.1#8). Un `error` event ne vient
+    // jamais d'un signal externe : c'est toujours un échec de spawn, donc on
+    // le compte dans le budget.
     proc.on('error', (err) => {
       console.error(`[Conduit] stdio process error for "${this.server.id}":`, err.message);
       this.process = null;
+      this.recordExit({ wasExternalSignal: false });
+      this.rejectAllPending(new Error(
+        `Stdio process "${this.server.id}" failed: ${err.message}`,
+      ));
     });
 
     return proc;
+  }
+
+  /**
+   * Audit 3.1#8 — détecte les crashs rapides et applique un backoff exponentiel.
+   * Réinitialise le compteur dès qu'un processus a vécu plus longtemps que
+   * `FAST_FAILURE_THRESHOLD_MS`.
+   *
+   * @param opts.wasExternalSignal — true si le process a été tué par un signal
+   *   externe (SIGTERM/SIGKILL/...). Dans ce cas on ne compte PAS comme une
+   *   fast failure pour ne pas bloquer un opérateur qui kill manuellement.
+   */
+  private recordExit(opts: { wasExternalSignal: boolean }): void {
+    if (opts.wasExternalSignal) {
+      // Reset on intentional kill — operator-driven, not crash loop.
+      this.consecutiveFastFailures = 0;
+      this.nextRespawnAllowedAt = 0;
+      return;
+    }
+    const livedMs = Date.now() - this.lastSpawnAt;
+    if (livedMs < FAST_FAILURE_THRESHOLD_MS) {
+      this.consecutiveFastFailures++;
+      const backoff = Math.min(
+        RESPAWN_BACKOFF_BASE_MS * 2 ** (this.consecutiveFastFailures - 1),
+        MAX_RESPAWN_BACKOFF_MS,
+      );
+      this.nextRespawnAllowedAt = Date.now() + backoff;
+    } else {
+      // Le process a tourné suffisamment longtemps — succès, on remet à zéro.
+      this.consecutiveFastFailures = 0;
+      this.nextRespawnAllowedAt = 0;
+    }
+  }
+
+  /**
+   * Audit 3.1#9 — rejette toutes les requêtes en attente avec l'erreur fournie
+   * et nettoie leurs timers. Idempotent (sûr à appeler plusieurs fois).
+   */
+  private rejectAllPending(error: Error): void {
+    for (const [id, req] of this.pending) {
+      clearTimeout(req.timer);
+      try {
+        req.reject(error);
+      } catch { /* swallow handler errors */ }
+      this.pending.delete(id);
+    }
+  }
+
+  /**
+   * Réinitialise le compteur de respawns rapides — appelé typiquement par
+   * l'API admin lors d'un reset du circuit-breaker, ou par le health-check
+   * une fois que l'opérateur a corrigé la commande.
+   */
+  resetRespawnBudget(): void {
+    this.consecutiveFastFailures = 0;
+    this.nextRespawnAllowedAt = 0;
+  }
+
+  /**
+   * Lecture diagnostique pour les tests / monitoring.
+   */
+  getRespawnState(): { consecutiveFastFailures: number; nextRespawnAllowedAt: number } {
+    return {
+      consecutiveFastFailures: this.consecutiveFastFailures,
+      nextRespawnAllowedAt: this.nextRespawnAllowedAt,
+    };
   }
 
   /**
@@ -329,4 +492,69 @@ export class StdioMcpClient implements IMcpClient {
       } catch { /* already dead */ }
     });
   }
+}
+
+/**
+ * cmd.exe and powershell interpret these characters as control tokens. When
+ * spawn() runs through a shell on Windows, an unchecked config value can
+ * inject commands (e.g. "node; calc.exe" -> calc is spawned alongside node).
+ * Arguments passed through spawn() on Windows with shell:true are also
+ * concatenated into that command line, so we validate them with the same list.
+ */
+const WINDOWS_SHELL_METACHARACTERS = /[&|;<>`$\r\n\0"'^%(){}\[\]]/;
+
+function assertNoShellMetacharacters(value: string, label: string): void {
+  if (typeof value !== 'string') {
+    throw new Error(`${label} must be a string`);
+  }
+  if (WINDOWS_SHELL_METACHARACTERS.test(value)) {
+    throw new Error(
+      `${label} contains shell metacharacters and was rejected under Windows shell execution`,
+    );
+  }
+}
+
+function isJsonRpcNotification(body: Record<string, unknown>): boolean {
+  return body['jsonrpc'] === '2.0'
+    && typeof body['method'] === 'string'
+    && body['id'] === undefined
+    && body['result'] === undefined
+    && body['error'] === undefined;
+}
+
+function isMcpNotification(body: Record<string, unknown>): boolean {
+  if (!isJsonRpcNotification(body)) {
+    return false;
+  }
+
+  const method = body['method'];
+  return typeof method === 'string' && method.startsWith('notifications/');
+}
+
+function writeStdioMessage(proc: ChildProcess, data: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (!proc.stdin) {
+      reject(new Error('Stdio child process has no stdin'));
+      return;
+    }
+
+    const onError = (error: Error) => {
+      proc.stdin?.off('error', onError);
+      reject(error);
+    };
+
+    proc.stdin.once('error', onError);
+
+    const cleanupAndResolve = () => {
+      proc.stdin?.off('error', onError);
+      resolve();
+    };
+
+    if (!proc.stdin.write(data)) {
+      proc.stdin.once('drain', cleanupAndResolve);
+      return;
+    }
+
+    cleanupAndResolve();
+  });
 }

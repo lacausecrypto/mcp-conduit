@@ -39,6 +39,7 @@ function makeConfig(
     tenant_isolation: { enabled: false, header: 'Authorization' },
     observability: { log_args: false, log_responses: false, redact_fields: [], retention_days: 1, db_path: ':memory:' },
     metrics: { enabled: false, port: 0 },
+    admin: { allow_private_networks: true },
     ...overrides,
   };
 }

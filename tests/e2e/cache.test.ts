@@ -9,7 +9,7 @@
  * - En-têtes X-Conduit-Cache-Status
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import {
   setup,
   teardown,
@@ -111,6 +111,23 @@ describe('Cache L1 et déduplication', () => {
       expect(res.headers.get('x-conduit-cache-status')).toBe('MISS');
       expect(ctx.mockServer.getCallCount('tools/call')).toBe(3);
     });
+
+    it('propage l’invalidation au cache L2 quand il est configuré', async () => {
+      const mockL2 = {
+        get: vi.fn().mockResolvedValue(undefined),
+        set: vi.fn(),
+        deleteByTool: vi.fn().mockResolvedValue(1),
+      };
+      const pipeline = (ctx.gateway as unknown as {
+        pipeline: { setL2Cache(l2: unknown, ttlMultiplier: number): void };
+      }).pipeline;
+      pipeline.setL2Cache(mockL2, 3);
+
+      await sendMcpRequest(ctx.app, 'test-server', makeToolCallMessage('get_contact', { id: 'l2-1' }));
+      await sendMcpRequest(ctx.app, 'test-server', makeToolCallMessage('create_contact', { name: 'L2' }));
+
+      expect(mockL2.deleteByTool).toHaveBeenCalledWith('get_contact', 'test-server');
+    });
   });
 
   describe('cache stats via /conduit/cache/stats', () => {
@@ -180,6 +197,102 @@ describe('Cache L1 et déduplication', () => {
       expect(Array.isArray(body.inflight)).toBe(true);
       expect(typeof body.count).toBe('number');
     });
+
+    // ── Audit 3.1#6 — cache stampede end-to-end ─────────────────────────
+    // Vérifie qu'avec 50 requêtes simultanées identiques sur une clé non
+    // encore en cache, la chaîne L1-miss + Inflight + upstream + L1-set
+    // ne déclenche qu'UN seul appel upstream. Pin du single-flight.
+
+    it('50 requêtes concurrentes identiques → 1 seul appel upstream (cache stampede protégé)', async () => {
+      ctx.gateway.getCacheStore().clear();
+      ctx.mockServer.resetCallCounts();
+
+      const msg = makeToolCallMessage('get_contact', { id: 'stampede-50' });
+      const promises = Array.from({ length: 50 }, () =>
+        sendMcpRequest(ctx.app, 'test-server', msg),
+      );
+      const responses = await Promise.all(promises);
+
+      // Tous succès
+      for (const res of responses) {
+        expect(res.status).toBe(200);
+      }
+      // Toutes les réponses contiennent le même result
+      const bodies = await Promise.all(responses.map((r) => r.clone().json() as Promise<Record<string, unknown>>));
+      const firstResult = bodies[0]?.['result'];
+      for (const body of bodies) {
+        expect(body['result']).toEqual(firstResult);
+      }
+      // Single-flight : un seul tools/call upstream
+      expect(ctx.mockServer.getCallCount('tools/call')).toBe(1);
+      // Et l'entrée est en L1 pour les requêtes suivantes
+      expect(ctx.gateway.getCacheStore().size).toBeGreaterThanOrEqual(1);
+    });
+
+    it('après stampede, une 51ᵉ requête identique est servie par L1 (HIT) sans nouvel appel upstream', async () => {
+      ctx.gateway.getCacheStore().clear();
+      ctx.mockServer.resetCallCounts();
+      const msg = makeToolCallMessage('get_contact', { id: 'stampede-then-hit' });
+
+      await Promise.all(Array.from({ length: 50 }, () => sendMcpRequest(ctx.app, 'test-server', msg)));
+      expect(ctx.mockServer.getCallCount('tools/call')).toBe(1);
+
+      const res = await sendMcpRequest(ctx.app, 'test-server', msg);
+      expect(res.status).toBe(200);
+      expect(res.headers.get('x-conduit-cache-status')).toBe('HIT');
+      expect(ctx.mockServer.getCallCount('tools/call')).toBe(1);
+    });
+
+    it('stampede sur clés différentes → N appels upstream distincts (pas de fausse coalescence)', async () => {
+      ctx.gateway.getCacheStore().clear();
+      ctx.mockServer.resetCallCounts();
+      // 20 clés distinctes, 5 requêtes simultanées par clé.
+      const promises: Promise<Response>[] = [];
+      for (let key = 0; key < 20; key++) {
+        const msg = makeToolCallMessage('get_contact', { id: `diff-${key}` });
+        for (let dup = 0; dup < 5; dup++) {
+          promises.push(sendMcpRequest(ctx.app, 'test-server', msg));
+        }
+      }
+      const responses = await Promise.all(promises);
+      for (const res of responses) {
+        expect(res.status).toBe(200);
+      }
+      // Single-flight par clé → 20 appels upstream attendus.
+      expect(ctx.mockServer.getCallCount('tools/call')).toBe(20);
+    });
+
+    it('stampede avec L2 actif : single-flight intra-pod respecté côté upstream (un seul tools/call)', async () => {
+      ctx.gateway.getCacheStore().clear();
+      ctx.mockServer.resetCallCounts();
+
+      const mockL2 = {
+        get: vi.fn().mockResolvedValue(undefined),
+        set: vi.fn().mockResolvedValue(undefined),
+        deleteByTool: vi.fn().mockResolvedValue(0),
+      };
+      const pipeline = (ctx.gateway as unknown as {
+        pipeline: { setL2Cache(l2: unknown, ttlMultiplier: number): void };
+      }).pipeline;
+      pipeline.setL2Cache(mockL2, 3);
+
+      try {
+        const msg = makeToolCallMessage('get_contact', { id: 'l2-stampede' });
+        await Promise.all(Array.from({ length: 50 }, () => sendMcpRequest(ctx.app, 'test-server', msg)));
+
+        // Single upstream call — c'est le but principal du single-flight.
+        expect(ctx.mockServer.getCallCount('tools/call')).toBe(1);
+        // Au moins un L2 set est observé (la valeur retournée est mise en cache).
+        // Note (audit 2.2) : actuellement tous les callers coalescés écrivent
+        // chacun en L2 — c'est wasteful mais idempotent. Un futur fix peut
+        // ajouter une dédup sur le set L2. On pin le comportement actuel pour
+        // détecter une régression accidentelle.
+        expect(mockL2.set.mock.calls.length).toBeGreaterThanOrEqual(1);
+      } finally {
+        // Detach the mock to avoid leaking into other tests.
+        pipeline.setL2Cache(undefined as unknown as null, 1);
+      }
+    });
   });
 
   describe('cache désactivé', () => {
@@ -210,6 +323,134 @@ describe('Cache L1 et déduplication', () => {
       await sendMcpRequest(noCache.app, 'test-server', msg);
 
       expect(noCache.mockServer.getCallCount('tools/call')).toBe(2);
+    });
+  });
+
+  // ── Audit High 3.2 #5 — MCP isError cache skip ─────────────────────────────
+  // An MCP tool that returns `isError: true` is a transient failure (invalid
+  // input, upstream rate-limit, partial outage). Caching such a response would
+  // poison every subsequent caller for the policy TTL. The gateway MUST skip
+  // caching these responses while still surfacing the body to the caller.
+  describe('isError cache skip (audit High 3.2 #5)', () => {
+    it('does not cache a tool response that contains isError:true', async () => {
+      // Configure get_contact to return an isError result on this run only.
+      ctx.mockServer.setTool({
+        name: 'get_contact',
+        annotations: { readOnlyHint: true },
+        result: {
+          content: [{ type: 'text', text: 'Contact lookup transiently failed' }],
+          isError: true,
+        },
+      });
+
+      const msg = makeToolCallMessage('get_contact', { id: 'iserror-1' });
+
+      const res1 = await sendMcpRequest(ctx.app, 'test-server', msg);
+      expect(res1.status).toBe(200);
+      expect(res1.headers.get('x-conduit-cache-status')).toBe('SKIP_ERROR');
+
+      const body1 = await res1.json() as { result?: { isError?: boolean } };
+      expect(body1.result?.isError).toBe(true);
+
+      // Second identical call must hit upstream again — not be served from L1.
+      const res2 = await sendMcpRequest(ctx.app, 'test-server', msg);
+      expect(res2.headers.get('x-conduit-cache-status')).toBe('SKIP_ERROR');
+      expect(ctx.mockServer.getCallCount('tools/call')).toBe(2);
+
+      // Restore the original (success) tool definition for downstream tests.
+      ctx.mockServer.setTool({
+        name: 'get_contact',
+        annotations: { readOnlyHint: true },
+        result: { id: '123', name: 'Alice Martin', email: 'alice@example.com' },
+      });
+    });
+
+    it('a successful follow-up call IS cached normally (no lingering skip)', async () => {
+      // First call: isError → SKIP_ERROR, no cache write.
+      ctx.mockServer.setTool({
+        name: 'get_contact',
+        annotations: { readOnlyHint: true },
+        result: {
+          content: [{ type: 'text', text: 'transient' }],
+          isError: true,
+        },
+      });
+      await sendMcpRequest(
+        ctx.app, 'test-server', makeToolCallMessage('get_contact', { id: 'recovered' }),
+      );
+
+      // Now upstream recovers — same key should MISS (no poison cache), then
+      // cache the success.
+      ctx.mockServer.setTool({
+        name: 'get_contact',
+        annotations: { readOnlyHint: true },
+        result: { id: 'recovered', name: 'Recovered' },
+      });
+      const ok1 = await sendMcpRequest(
+        ctx.app, 'test-server', makeToolCallMessage('get_contact', { id: 'recovered' }),
+      );
+      expect(ok1.headers.get('x-conduit-cache-status')).toBe('MISS');
+
+      const ok2 = await sendMcpRequest(
+        ctx.app, 'test-server', makeToolCallMessage('get_contact', { id: 'recovered' }),
+      );
+      expect(ok2.headers.get('x-conduit-cache-status')).toBe('HIT');
+    });
+
+    it('isError:false is cached normally (only true triggers the skip)', async () => {
+      ctx.mockServer.setTool({
+        name: 'get_contact',
+        annotations: { readOnlyHint: true },
+        result: {
+          content: [{ type: 'text', text: 'real success' }],
+          isError: false,
+        },
+      });
+      const msg = makeToolCallMessage('get_contact', { id: 'notError' });
+
+      const res1 = await sendMcpRequest(ctx.app, 'test-server', msg);
+      expect(res1.headers.get('x-conduit-cache-status')).toBe('MISS');
+
+      const res2 = await sendMcpRequest(ctx.app, 'test-server', msg);
+      expect(res2.headers.get('x-conduit-cache-status')).toBe('HIT');
+
+      ctx.mockServer.setTool({
+        name: 'get_contact',
+        annotations: { readOnlyHint: true },
+        result: { id: '123', name: 'Alice Martin', email: 'alice@example.com' },
+      });
+    });
+
+    it('preserves the result body verbatim (caller still sees isError:true)', async () => {
+      ctx.mockServer.setTool({
+        name: 'get_contact',
+        annotations: { readOnlyHint: true },
+        result: {
+          content: [{ type: 'text', text: 'detailed error context' }],
+          isError: true,
+          // Custom field that callers may rely on
+          retryAfter: 5,
+        },
+      });
+
+      const res = await sendMcpRequest(
+        ctx.app, 'test-server', makeToolCallMessage('get_contact', { id: 'verbatim' }),
+      );
+      const body = await res.json() as {
+        result?: { content?: unknown[]; isError?: boolean; retryAfter?: number };
+        error?: unknown;
+      };
+      // No JSON-RPC error envelope — it's a successful response with isError flag
+      expect(body.error).toBeUndefined();
+      expect(body.result?.isError).toBe(true);
+      expect(body.result?.retryAfter).toBe(5);
+      expect(Array.isArray(body.result?.content)).toBe(true);
+
+      ctx.mockServer.setTool({
+        name: 'get_contact',
+        annotations: { readOnlyHint: true },
+        result: { id: '123', name: 'Alice Martin', email: 'alice@example.com' },
+      });
     });
   });
 });

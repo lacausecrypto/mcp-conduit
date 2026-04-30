@@ -433,6 +433,46 @@ describe('RedisCacheStore', () => {
     });
   });
 
+  // ── deleteByTool() ─────────────────────────────────────────────────────
+  describe('deleteByTool()', () => {
+    it('returns 0 when not connected', async () => {
+      const store = createDisconnectedStore();
+      expect(await store.deleteByTool('get_contact', 'server-1')).toBe(0);
+    });
+
+    it('deletes only entries matching tool and server', async () => {
+      const { store, mockClient } = createConnectedStore();
+      mockClient.scanIterator.mockReturnValue((async function* () {
+        yield ['conduit:cache:k1', 'conduit:cache:k2', 'conduit:cache:k3'];
+      })());
+      mockClient.get.mockImplementation(async (key: string) => {
+        if (key.endsWith('k1')) return JSON.stringify(makeEntry({ toolName: 'get_contact', serverId: 'server-1' }));
+        if (key.endsWith('k2')) return JSON.stringify(makeEntry({ toolName: 'search_contacts', serverId: 'server-1' }));
+        return JSON.stringify(makeEntry({ toolName: 'get_contact', serverId: 'server-2' }));
+      });
+      mockClient.del.mockResolvedValue(1);
+
+      const deleted = await store.deleteByTool('get_contact', 'server-1');
+
+      expect(deleted).toBe(1);
+      expect(mockClient.del).toHaveBeenCalledTimes(1);
+      expect(mockClient.del).toHaveBeenCalledWith('conduit:cache:k1');
+    });
+
+    it('increments errors when a scanned entry cannot be parsed', async () => {
+      const { store, mockClient } = createConnectedStore();
+      mockClient.scanIterator.mockReturnValue((async function* () {
+        yield ['conduit:cache:bad-json'];
+      })());
+      mockClient.get.mockResolvedValue('{not-json');
+
+      const deleted = await store.deleteByTool('get_contact', 'server-1');
+
+      expect(deleted).toBe(0);
+      expect(store.getStats().errors).toBe(1);
+    });
+  });
+
   // ── flush() ────────────────────────────────────────────────────────────
   describe('flush()', () => {
     it('delegates to deleteByPattern("*")', async () => {
@@ -495,6 +535,7 @@ describe('RedisCacheStore', () => {
         hits: 0,
         misses: 0,
         writes: 0,
+        writes_coalesced: 0,
         errors: 0,
         connected: false,
       });
@@ -585,6 +626,164 @@ describe('RedisCacheStore', () => {
       mockClient.get.mockResolvedValue(null);
       await store.get('raw-key');
       expect(mockClient.get).toHaveBeenCalledWith('raw-key');
+    });
+  });
+
+  // ─── Audit 3.1#7 — L2 hang resilience ─────────────────────────────────────
+  // Vérifie que l'opération `get()` est bornée par la course 100ms intégrée,
+  // quel que soit le comportement de Redis (jamais résoudre, résoudre tard,
+  // throw asynchrone après la course, etc.). Le pipeline Conduit ne doit
+  // jamais voir une latence > 100ms à cause de Redis.
+
+  describe('hang resilience (audit #7)', () => {
+    it('get() returns undefined within ~100ms when redis never resolves', async () => {
+      const { store, mockClient } = createConnectedStore();
+      // Pending forever — race must fire.
+      mockClient.get.mockImplementation(() => new Promise(() => { /* never resolves */ }));
+      const start = Date.now();
+      const result = await store.get('hang-forever');
+      const elapsed = Date.now() - start;
+      expect(result).toBeUndefined();
+      // Race target is 100ms; allow generous slack for the test runner.
+      expect(elapsed).toBeLessThan(300);
+      expect(store.getStats().misses).toBe(1);
+    });
+
+    it('multiple concurrent get() against hanging redis all complete in ~100ms each', async () => {
+      const { store, mockClient } = createConnectedStore();
+      mockClient.get.mockImplementation(() => new Promise(() => { /* never resolves */ }));
+      const start = Date.now();
+      const results = await Promise.all(Array.from({ length: 10 }, (_, i) => store.get(`hang-${i}`)));
+      const elapsed = Date.now() - start;
+      // All 10 in parallel — total wall time still ~100ms (each races independently).
+      expect(elapsed).toBeLessThan(300);
+      for (const r of results) expect(r).toBeUndefined();
+      expect(store.getStats().misses).toBe(10);
+    });
+
+    it('a delayed Redis resolution after the race fires is silently discarded (no late state mutation)', async () => {
+      const { store, mockClient } = createConnectedStore();
+      let resolveLate: ((v: string | null) => void) | null = null;
+      mockClient.get.mockImplementation(() => new Promise<string | null>((resolve) => {
+        resolveLate = resolve;
+      }));
+      const result = await store.get('late-key');
+      expect(result).toBeUndefined();
+      const missesBefore = store.getStats().misses;
+      // Now resolve the original Redis promise — it should be discarded.
+      resolveLate?.(JSON.stringify(makeEntry()));
+      // Give microtasks a chance to settle.
+      await new Promise((r) => setTimeout(r, 20));
+      // Stats not double-counted.
+      expect(store.getStats().misses).toBe(missesBefore);
+      // No spurious hit counter from the late resolve.
+      expect(store.getStats().hits).toBe(0);
+    });
+
+    it('Redis throwing AFTER the timeout race is observed by the timeout, not by the catch', async () => {
+      const { store, mockClient } = createConnectedStore();
+      mockClient.get.mockImplementation(
+        () => new Promise<string>((_, reject) => setTimeout(() => reject(new Error('Late error')), 500)),
+      );
+      const start = Date.now();
+      const result = await store.get('late-throw');
+      expect(result).toBeUndefined();
+      // Result should arrive at ~100ms (race), not 500ms (the throw).
+      expect(Date.now() - start).toBeLessThan(300);
+    });
+
+    it('after a hang, the next get() against a working Redis succeeds normally', async () => {
+      const { store, mockClient } = createConnectedStore();
+      // First call hangs.
+      mockClient.get.mockImplementationOnce(() => new Promise(() => { /* never */ }));
+      const r1 = await store.get('first-hang');
+      expect(r1).toBeUndefined();
+      // Second call returns valid data.
+      mockClient.get.mockResolvedValueOnce(JSON.stringify(makeEntry()));
+      const r2 = await store.get('second-ok');
+      expect(r2?.toolName).toBe('get_contact');
+      expect(store.getStats().hits).toBe(1);
+    });
+
+    it('set() returns synchronously (fire-and-forget) even when Redis hangs', () => {
+      const { store, mockClient } = createConnectedStore();
+      mockClient.set.mockImplementation(() => new Promise(() => { /* never resolves */ }));
+      const start = Date.now();
+      // set() is declared as `void` — it must return immediately and not
+      // propagate a rejection to the caller event loop.
+      const result = store.set('hang-set', makeEntry(), 60);
+      expect(result).toBeUndefined();
+      // Synchronous — no event loop spin.
+      expect(Date.now() - start).toBeLessThan(50);
+    });
+  });
+
+  // ── Audit Sprint 3 #7 — L2 stampede write deduplication ───────────────────
+  describe('write coalescing (audit Sprint 3 #7)', () => {
+    it('50 concurrent set() calls for the same key issue 1 redis SET', () => {
+      const { store, mockClient } = createConnectedStore();
+      const entry = makeEntry();
+
+      for (let i = 0; i < 50; i++) {
+        store.set('hot-key', entry, 60);
+      }
+      expect(mockClient.set).toHaveBeenCalledTimes(1);
+      const stats = store.getStats();
+      expect(stats.writes).toBe(1);
+      expect(stats.writes_coalesced).toBe(49);
+    });
+
+    it('different keys are NOT coalesced together', () => {
+      const { store, mockClient } = createConnectedStore();
+      for (let i = 0; i < 10; i++) {
+        store.set(`key-${i}`, makeEntry(), 60);
+      }
+      expect(mockClient.set).toHaveBeenCalledTimes(10);
+      expect(store.getStats().writes_coalesced).toBe(0);
+    });
+
+    it('a write after the coalesce window expires is allowed through', async () => {
+      vi.useFakeTimers();
+      try {
+        const { store, mockClient } = createConnectedStore();
+        store.set('refresh-key', makeEntry(), 60);
+        expect(mockClient.set).toHaveBeenCalledTimes(1);
+
+        // Within window — coalesced.
+        store.set('refresh-key', makeEntry(), 60);
+        expect(mockClient.set).toHaveBeenCalledTimes(1);
+
+        // Advance past the 200 ms window.
+        vi.advanceTimersByTime(250);
+
+        // Now a fresh write goes through (legitimate refresh, not stampede).
+        store.set('refresh-key', makeEntry(), 60);
+        expect(mockClient.set).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('caps the dedup map size to keep memory bounded under churn', () => {
+      const { store, mockClient } = createConnectedStore();
+      // Push more keys than RECENT_WRITES_MAX (4096)
+      for (let i = 0; i < 5_000; i++) {
+        store.set(`churn-${i}`, makeEntry(), 60);
+      }
+      expect(mockClient.set).toHaveBeenCalledTimes(5_000);
+      // Internal map must not exceed the cap (assert on the private field)
+      const recent = (store as unknown as { recentWrites: Map<unknown, unknown> }).recentWrites;
+      expect(recent.size).toBeLessThanOrEqual(4096);
+    });
+
+    it('coalesce decision is per-key — distinct keys all reach Redis even within the window', () => {
+      const { store, mockClient } = createConnectedStore();
+      // First key bursts — only 1 reaches Redis.
+      for (let i = 0; i < 5; i++) store.set('A', makeEntry(), 60);
+      // Different key — must go through despite being within the window.
+      store.set('B', makeEntry(), 60);
+      expect(mockClient.set).toHaveBeenCalledTimes(2);
+      expect(store.getStats().writes_coalesced).toBe(4);
     });
   });
 });

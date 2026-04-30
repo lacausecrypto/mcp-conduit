@@ -26,6 +26,7 @@ function makeJsonResponse(body: unknown, sessionId?: string) {
       forEach: (fn: (v: string, k: string) => void) => headers.forEach(fn),
     },
     json: vi.fn().mockResolvedValue(body),
+    text: vi.fn().mockResolvedValue(JSON.stringify(body)),
   };
 }
 
@@ -153,6 +154,19 @@ describe('McpClient - forward()', () => {
     expect(headers['Authorization']).toBe('Bearer tok');
   });
 
+  it('includes static upstream headers from the server config', async () => {
+    mockFetch.mockResolvedValue(makeJsonResponse({}));
+
+    const client = new McpClient({
+      ...makeServer(),
+      headers: { 'X-API-Key': 'server-secret' },
+    });
+    await client.forward({ body: {} });
+
+    const headers = mockFetch.mock.calls[0][1].headers;
+    expect(headers['X-API-Key']).toBe('server-secret');
+  });
+
   it('returns isStream=true for text/event-stream response', async () => {
     mockFetch.mockResolvedValue(makeStreamResponse());
 
@@ -172,11 +186,52 @@ describe('McpClient - forward()', () => {
         get: (_key: string) => 'text/plain',
         forEach: vi.fn(),
       },
-      json: vi.fn().mockRejectedValue(new SyntaxError('Unexpected token')),
+      text: vi.fn().mockResolvedValue('upstream exploded'),
     });
 
     const client = new McpClient(makeServer());
     await expect(client.forward({ body: {} })).rejects.toThrow('non-JSON');
+  });
+
+  it('accepts successful non-JSON notification responses as no-body acknowledgements', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 202,
+      headers: {
+        get: (_key: string) => 'text/plain',
+        forEach: vi.fn(),
+      },
+      text: vi.fn().mockResolvedValue('Accepted'),
+    });
+
+    const client = new McpClient(makeServer());
+    const result = await client.forward({
+      body: { jsonrpc: '2.0', method: 'notifications/initialized', params: {} },
+    });
+
+    expect(result.status).toBe(202);
+    expect(result.body).toBeNull();
+    expect(result.isStream).toBe(false);
+  });
+
+  it('accepts empty successful notification responses as no-body acknowledgements', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 202,
+      headers: {
+        get: (_key: string) => 'application/json',
+        forEach: vi.fn(),
+      },
+      text: vi.fn().mockResolvedValue(''),
+    });
+
+    const client = new McpClient(makeServer());
+    const result = await client.forward({
+      body: { jsonrpc: '2.0', method: 'notifications/initialized', params: {} },
+    });
+
+    expect(result.status).toBe(202);
+    expect(result.body).toBeNull();
   });
 
   it('throws on network error', async () => {
@@ -344,6 +399,19 @@ describe('McpClient - openSseStream()', () => {
 
     const headers = mockFetch.mock.calls[0][1].headers;
     expect(headers['X-Conduit-Trace-Id']).toBe('sse-trace');
+  });
+
+  it('includes static upstream headers on SSE requests', async () => {
+    mockFetch.mockResolvedValue({ ok: true, status: 200 });
+
+    const client = new McpClient({
+      ...makeServer(),
+      headers: { 'X-API-Key': 'server-secret' },
+    });
+    await client.openSseStream();
+
+    const headers = mockFetch.mock.calls[0][1].headers;
+    expect(headers['X-API-Key']).toBe('server-secret');
   });
 
   it('does not include Mcp-Session-Id when session not set', async () => {

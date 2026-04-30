@@ -31,6 +31,8 @@ export interface MockMcpServer {
   resetCallCounts(): void;
   /** Retourne tous les appels reçus pour une méthode */
   getCalls(method: string): unknown[];
+  /** Retourne les derniers headers reçus pour une méthode */
+  getLastHeaders(method: string): Record<string, string> | null;
   /** Ajoute ou met à jour un outil simulé */
   setTool(tool: MockTool): void;
   /** Définit un comportement d'erreur pour un outil spécifique */
@@ -105,6 +107,7 @@ export function startMockMcpServer(
   // État interne du serveur simulé
   const callCounts = new Map<string, number>();
   const callArgs = new Map<string, unknown[]>();
+  const callHeaders = new Map<string, Record<string, string>[]>();
   const toolMap = new Map<string, MockTool>();
   const toolErrors = new Map<string, string>();
 
@@ -116,23 +119,28 @@ export function startMockMcpServer(
   /**
    * Incrémente le compteur d'une méthode et mémorise les arguments.
    */
-  function recordCall(method: string, args?: unknown): void {
+  function recordCall(method: string, args?: unknown, headers?: Record<string, string>): void {
     callCounts.set(method, (callCounts.get(method) ?? 0) + 1);
     const existing = callArgs.get(method) ?? [];
     existing.push(args ?? null);
     callArgs.set(method, existing);
+    if (headers) {
+      const existingHeaders = callHeaders.get(method) ?? [];
+      existingHeaders.push(headers);
+      callHeaders.set(method, existingHeaders);
+    }
   }
 
   /**
    * Traite une requête JSON-RPC et retourne la réponse appropriée.
    */
-  function handleJsonRpc(req: unknown): Record<string, unknown> {
+  function handleJsonRpc(req: unknown, headers?: Record<string, string>): Record<string, unknown> {
     const request = req as { jsonrpc?: string; id?: unknown; method?: string; params?: Record<string, unknown> };
 
     const id = request.id ?? null;
     const method = request.method ?? '';
 
-    recordCall(method, request.params);
+    recordCall(method, request.params, headers);
 
     // Méthode : initialize
     if (method === 'initialize') {
@@ -221,16 +229,21 @@ export function startMockMcpServer(
       req.on('end', () => {
         try {
           const parsed: unknown = JSON.parse(body);
+          const headerSnapshot = Object.fromEntries(
+            Object.entries(req.headers)
+              .filter(([, value]) => typeof value === 'string')
+              .map(([key, value]) => [key, String(value)]),
+          );
 
           res.setHeader('Content-Type', 'application/json');
 
           // Support des requêtes batch
           if (Array.isArray(parsed)) {
-            const responses = parsed.map(handleJsonRpc);
+            const responses = parsed.map((item) => handleJsonRpc(item, headerSnapshot));
             res.writeHead(200);
             res.end(JSON.stringify(responses));
           } else {
-            const response = handleJsonRpc(parsed);
+            const response = handleJsonRpc(parsed, headerSnapshot);
             res.writeHead(200);
             res.end(JSON.stringify(response));
           }
@@ -280,10 +293,16 @@ export function startMockMcpServer(
         resetCallCounts(): void {
           callCounts.clear();
           callArgs.clear();
+          callHeaders.clear();
         },
 
         getCalls(method: string): unknown[] {
           return callArgs.get(method) ?? [];
+        },
+
+        getLastHeaders(method: string): Record<string, string> | null {
+          const values = callHeaders.get(method) ?? [];
+          return values.length > 0 ? values[values.length - 1] ?? null : null;
         },
 
         setTool(tool: MockTool): void {

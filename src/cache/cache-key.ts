@@ -20,7 +20,7 @@ export interface CacheKeyOptions {
   serverId: string;
   toolName: string;
   args: Record<string, unknown>;
-  /** Identifiant du tenant extrait de l'en-tête Authorization */
+  /** Identifiant logique du tenant utilisé pour segmenter le cache */
   tenantId?: string;
   /** Identifiant du groupe de session (X-Conduit-Group) */
   groupId?: string;
@@ -62,22 +62,28 @@ export function generateCacheKey(options: CacheKeyOptions): string {
 
 /**
  * Filtre les arguments à exclure de la clé de cache.
+ *
+ * Normalisation supplémentaire (battle-test #2) : tout argument à valeur
+ * `undefined` est explicitement supprimé. Sans ce filtre, deux requêtes
+ * distinctes sémantiquement — `{a:1, b:undefined}` et `{a:1}` — produisent
+ * la même clé SHA-256 parce que JSON.stringify omet undefined. En les
+ * éliminant ici, le comportement « cache traite undefined comme absent »
+ * est rendu explicite et impossible à confondre avec une non-normalisation.
+ *
+ * Les valeurs `null` sont préservées telles quelles : elles sont
+ * sémantiquement distinctes de "absent" et donnent une clé différente.
  */
 function filterArgs(
   args: Record<string, unknown>,
   ignoreArgs: string[],
 ): Record<string, unknown> {
-  if (ignoreArgs.length === 0) {
-    return args;
-  }
-
-  const ignoreSet = new Set(ignoreArgs);
+  const ignoreSet = ignoreArgs.length > 0 ? new Set(ignoreArgs) : null;
   const filtered: Record<string, unknown> = {};
 
   for (const [key, value] of Object.entries(args)) {
-    if (!ignoreSet.has(key)) {
-      filtered[key] = value;
-    }
+    if (ignoreSet !== null && ignoreSet.has(key)) continue;
+    if (value === undefined) continue;
+    filtered[key] = value;
   }
 
   return filtered;
@@ -86,6 +92,9 @@ function filterArgs(
 /**
  * Extrait l'identifiant tenant depuis un en-tête HTTP.
  * Supporte les JWT Bearer et les valeurs directes.
+ *
+ * Important: un Bearer non-JWT ne doit pas être utilisé tel quel comme
+ * identifiant de tenant, sinon la clé API elle-même finit dans la clé de cache.
  */
 export function extractTenantId(headerValue: string | undefined): string | undefined {
   if (!headerValue) {
@@ -96,11 +105,7 @@ export function extractTenantId(headerValue: string | undefined): string | undef
   if (bearerMatch) {
     const token = bearerMatch[1];
     if (token) {
-      const tenantFromJwt = extractJwtClaim(token);
-      if (tenantFromJwt) {
-        return tenantFromJwt;
-      }
-      return token;
+      return extractJwtClaim(token) ?? hashOpaqueBearerToken(token);
     }
   }
 
@@ -139,4 +144,8 @@ function extractJwtClaim(token: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function hashOpaqueBearerToken(token: string): string {
+  return `bearer:${createHash('sha256').update(token).digest('hex')}`;
 }

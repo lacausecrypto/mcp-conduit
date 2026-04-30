@@ -5,6 +5,32 @@
 
 import { Counter, Gauge, Histogram, Registry } from 'prom-client';
 
+/**
+ * Maximum length for label values derived from user-controlled input
+ * (tool names, client IDs, JSON-RPC error type). Prevents a single hostile
+ * client from inflating the Prometheus time-series space with long,
+ * unique tokens. 64 characters is comfortably above anything the spec
+ * realistically emits.
+ */
+const MAX_LABEL_LENGTH = 64;
+const LABEL_SAFE_CHARSET = /[^a-zA-Z0-9._/:-]/g;
+
+/**
+ * Normalizes a label value so that it is short, printable, and bounded to
+ * a safe charset. Values that become empty after stripping fall back to
+ * the reserved "_other" bucket so we can still emit a metric.
+ */
+export function sanitizeMetricLabel(value: string | undefined | null): string {
+  if (value === undefined || value === null) return '_unknown';
+  const str = String(value);
+  if (str.length === 0) return '_empty';
+  const stripped = str.replace(LABEL_SAFE_CHARSET, '_');
+  const truncated = stripped.length > MAX_LABEL_LENGTH
+    ? `${stripped.slice(0, MAX_LABEL_LENGTH)}_trunc`
+    : stripped;
+  return truncated.length === 0 ? '_other' : truncated;
+}
+
 export class ConduitMetrics {
   public readonly registry: Registry;
 

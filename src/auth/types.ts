@@ -27,6 +27,13 @@ export interface AuthConfig {
   client_claim?: string;
   /** API key — Liste des clés configurées */
   api_keys?: ApiKeyEntry[];
+  /**
+   * JWT — Liste blanche d'algorithmes acceptés.
+   * Par défaut : algorithmes asymétriques uniquement (RS*, PS*, ES*, EdDSA).
+   * Les algorithmes symétriques (HS*) et "none" sont toujours interdits dans
+   * un contexte JWKS.
+   */
+  algorithms?: string[];
 }
 
 /** Résultat d'une authentification */

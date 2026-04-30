@@ -26,12 +26,18 @@ import type { PluginConfig, HookName } from '../../src/plugins/types.js';
 
 let tmpDir: string;
 
-beforeEach(() => {
+beforeEach(async () => {
   tmpDir = mkdtempSync(join(tmpdir(), 'conduit-plugin-loader-test-'));
+  // Plugin loader now restricts plugins to ./plugins by default; whitelist
+  // the temp directory so existing tests can keep using mkdtempSync.
+  const { _setTestAllowedDirs } = await import('../../src/plugins/loader.js');
+  _setTestAllowedDirs([tmpDir]);
 });
 
-afterEach(() => {
+afterEach(async () => {
   rmSync(tmpDir, { recursive: true, force: true });
+  const { _resetTestAllowedDirs } = await import('../../src/plugins/loader.js');
+  _resetTestAllowedDirs();
 });
 
 /**
@@ -688,6 +694,93 @@ describe('loadSinglePlugin — all valid hooks accepted', () => {
       expect(result[0].hooks[hook]).toBeTypeOf('function');
     }
 
+    logSpy.mockRestore();
+  });
+});
+
+// ── Battle-test #4 — directory allowlist ─────────────────────────────────────
+describe('plugin path allowlist', () => {
+  it('rejects a plugin file outside any allowed directory', async () => {
+    const { loadPlugins, _resetTestAllowedDirs } = await import('../../src/plugins/loader.js');
+    // Drop the per-test allowlist injected by the parent beforeEach so we
+    // exercise the default ./plugins-only behavior.
+    _resetTestAllowedDirs();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const pluginPath = writePlugin('rogue.mjs', `
+      export default { name: 'rogue', hooks: { 'before:request': async () => {} } };
+    `);
+
+    const result = await loadPlugins([
+      { name: 'Rogue', path: pluginPath, hooks: ['before:request'] },
+    ]);
+
+    expect(result).toEqual([]);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to load plugin "Rogue"'),
+      expect.stringContaining('outside the allowed plugin directories'),
+    );
+    errorSpy.mockRestore();
+  });
+
+  it('accepts a plugin under the configured allowedDirs option', async () => {
+    const { loadPlugins, _resetTestAllowedDirs } = await import('../../src/plugins/loader.js');
+    _resetTestAllowedDirs();
+    const pluginPath = writePlugin('legit.mjs', `
+      export default { name: 'legit', hooks: { 'before:request': async () => {} } };
+    `);
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const result = await loadPlugins(
+      [{ name: 'Legit', path: pluginPath, hooks: ['before:request'] }],
+      { allowedDirs: [tmpDir] },
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0].name).toBe('legit');
+    logSpy.mockRestore();
+  });
+
+  it('treats the allowed dir as a directory, not a prefix (no foo/bar leaks)', async () => {
+    // Create a sibling directory whose name STARTS WITH the allowed dir name.
+    // The allowlist must not match it via simple string prefix.
+    const { loadPlugins, _resetTestAllowedDirs } = await import('../../src/plugins/loader.js');
+    _resetTestAllowedDirs();
+
+    const allowed = join(tmpDir, 'plugins');
+    mkdirSync(allowed, { recursive: true });
+    const sneaky = join(tmpDir, 'plugins-evil');
+    mkdirSync(sneaky, { recursive: true });
+    const sneakyPath = join(sneaky, 'p.mjs');
+    writeFileSync(sneakyPath, `
+      export default { name: 'sneaky', hooks: { 'before:request': async () => {} } };
+    `, 'utf-8');
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const result = await loadPlugins(
+      [{ name: 'Sneaky', path: sneakyPath, hooks: ['before:request'] }],
+      { allowedDirs: [allowed] },
+    );
+    expect(result).toEqual([]);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to load plugin "Sneaky"'),
+      expect.stringContaining('outside the allowed plugin directories'),
+    );
+    errorSpy.mockRestore();
+  });
+
+  it('an empty allowedDirs array disables the check (explicit opt-out)', async () => {
+    const { loadPlugins, _resetTestAllowedDirs } = await import('../../src/plugins/loader.js');
+    _resetTestAllowedDirs();
+    const pluginPath = writePlugin('opt-out.mjs', `
+      export default { name: 'opt-out', hooks: { 'before:request': async () => {} } };
+    `);
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const result = await loadPlugins(
+      [{ name: 'OptOut', path: pluginPath, hooks: ['before:request'] }],
+      { allowedDirs: [] },
+    );
+    expect(result).toHaveLength(1);
     logSpy.mockRestore();
   });
 });

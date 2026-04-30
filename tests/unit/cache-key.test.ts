@@ -98,8 +98,11 @@ describe('extractTenantId', () => {
     expect(extractTenantId(`Bearer ${token}`)).toBe('user-456');
   });
 
-  it('retourne la valeur brute pour un JWT Bearer malformé', () => {
-    expect(extractTenantId('Bearer not-a-jwt')).toBe('not-a-jwt');
+  it('hache un Bearer opaque au lieu de retourner le secret brut', () => {
+    const tenantId = extractTenantId('Bearer not-a-jwt');
+    expect(tenantId).toBeDefined();
+    expect(tenantId).toMatch(/^bearer:[a-f0-9]{64}$/);
+    expect(tenantId).not.toContain('not-a-jwt');
   });
 
   it('est insensible à la casse du préfixe Bearer', () => {
@@ -107,5 +110,48 @@ describe('extractTenantId', () => {
     const token = `header.${payload}.signature`;
     expect(extractTenantId(`BEARER ${token}`)).toBe('my-tenant');
     expect(extractTenantId(`bearer ${token}`)).toBe('my-tenant');
+  });
+});
+
+// ── Battle-test #2 — undefined argument normalization ────────────────────────
+describe('generateCacheKey — undefined argument handling', () => {
+  it('explicitly drops undefined values so cache treats them as absent', () => {
+    const k1 = generateCacheKey({ serverId: 's', toolName: 't', args: { a: 1, b: undefined } });
+    const k2 = generateCacheKey({ serverId: 's', toolName: 't', args: { a: 1 } });
+    // The behavior is now intentional and documented: undefined === missing.
+    expect(k1).toBe(k2);
+  });
+
+  it('null is preserved and produces a distinct key from undefined/missing', () => {
+    const kNull = generateCacheKey({ serverId: 's', toolName: 't', args: { a: 1, b: null } });
+    const kMissing = generateCacheKey({ serverId: 's', toolName: 't', args: { a: 1 } });
+    const kUndef = generateCacheKey({ serverId: 's', toolName: 't', args: { a: 1, b: undefined } });
+    expect(kNull).not.toBe(kMissing);
+    expect(kNull).not.toBe(kUndef);
+    expect(kMissing).toBe(kUndef);
+  });
+
+  it('nested undefined inside objects still differs from nested null', () => {
+    const kNullNested = generateCacheKey({
+      serverId: 's', toolName: 't', args: { outer: { x: null } },
+    });
+    const kUndefNested = generateCacheKey({
+      serverId: 's', toolName: 't', args: { outer: { x: undefined } },
+    });
+    // deterministicStringify normalizes nested undefined → omitted by JSON
+    // (matches top-level behavior). Document that contract.
+    const kMissingNested = generateCacheKey({
+      serverId: 's', toolName: 't', args: { outer: {} },
+    });
+    expect(kUndefNested).toBe(kMissingNested);
+    expect(kNullNested).not.toBe(kUndefNested);
+  });
+
+  it('an entirely-undefined args object hashes to the same key as empty args', () => {
+    const kAllUndef = generateCacheKey({
+      serverId: 's', toolName: 't', args: { a: undefined, b: undefined },
+    });
+    const kEmpty = generateCacheKey({ serverId: 's', toolName: 't', args: {} });
+    expect(kAllUndef).toBe(kEmpty);
   });
 });

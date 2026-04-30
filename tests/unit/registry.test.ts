@@ -87,7 +87,7 @@ describe('ServerRegistry', () => {
       expect(servers.map((s) => s.config.id)).toContain('server-b');
     });
 
-    it('initialise les serveurs comme sains par défaut', () => {
+    it('initialise les serveurs comme non observés tant qu’aucun refresh n’a réussi', () => {
       const config = makeConfig([{ id: 'server-a', url: 'http://localhost:3001/mcp' }]);
       const clients = new Map([
         ['server-a', makeMockClient('server-a', []) as unknown as import('../../src/proxy/mcp-client.js').McpClient],
@@ -96,7 +96,8 @@ describe('ServerRegistry', () => {
       const registry = new ServerRegistry(config, clients, getMetrics());
       const health = registry.getHealthStatus();
 
-      expect(health[0]?.healthy).toBe(true);
+      expect(health[0]?.healthy).toBe(false);
+      expect(health[0]?.lastChecked).toBe(0);
     });
   });
 

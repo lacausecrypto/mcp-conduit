@@ -45,6 +45,14 @@ export interface E2eSetupOptions {
   rate_limits?: RateLimitConfig;
   /** Configuration des guardrails */
   guardrails?: GuardrailsConfig;
+  /** Clé d'administration à injecter dans la config */
+  adminKey?: string;
+  /** Configuration connect optionnelle */
+  connect?: ConduitGatewayConfig['connect'];
+  /** Plan identité optionnel */
+  identity?: ConduitGatewayConfig['identity'];
+  /** Plan gouvernance optionnel */
+  governance?: ConduitGatewayConfig['governance'];
 }
 
 /**
@@ -62,6 +70,10 @@ export async function setup(options: E2eSetupOptions = {}): Promise<E2eTestConte
     acl,
     rate_limits,
     guardrails,
+    adminKey,
+    connect,
+    identity,
+    governance,
   } = options;
 
   // Démarrage du serveur MCP simulé sur un port aléatoire
@@ -115,6 +127,9 @@ export async function setup(options: E2eSetupOptions = {}): Promise<E2eTestConte
       enabled: false,
       port: 0,
     },
+    admin: {
+      allow_private_networks: true,
+    },
   };
 
   // Sections optionnelles
@@ -122,6 +137,13 @@ export async function setup(options: E2eSetupOptions = {}): Promise<E2eTestConte
   if (acl !== undefined) baseConfig.acl = acl;
   if (rate_limits !== undefined) baseConfig.rate_limits = rate_limits;
   if (guardrails !== undefined) baseConfig.guardrails = guardrails;
+  if (adminKey !== undefined) baseConfig.admin = {
+    ...baseConfig.admin,
+    key: adminKey,
+  };
+  if (connect !== undefined) baseConfig.connect = connect;
+  if (identity !== undefined) baseConfig.identity = identity;
+  if (governance !== undefined) baseConfig.governance = governance;
 
   // Réinitialisation des métriques pour l'isolation entre tests
   resetMetrics();

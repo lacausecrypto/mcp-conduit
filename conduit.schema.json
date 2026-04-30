@@ -11,7 +11,7 @@
       "description": "HTTP server settings",
       "properties": {
         "port": { "type": "integer", "default": 8080, "minimum": 1, "maximum": 65535, "description": "Listening port" },
-        "host": { "type": "string", "default": "0.0.0.0", "description": "Bind address" },
+        "host": { "type": "string", "default": "127.0.0.1", "description": "Bind address" },
         "tls": {
           "type": "object",
           "properties": {
@@ -65,6 +65,53 @@
           "command": { "type": "string", "description": "Command to execute (stdio transport)" },
           "args": { "type": "array", "items": { "type": "string" }, "description": "Command arguments (stdio)" },
           "env": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Environment variables (stdio)" },
+          "managed_runtime": {
+            "type": "object",
+            "description": "Managed runtime metadata for stdio/package servers",
+            "properties": {
+              "enabled": { "type": "boolean", "default": true },
+              "source_type": { "type": "string", "enum": ["npm", "pypi", "oci", "command"] },
+              "source_ref": { "type": "string" },
+              "channel": { "type": "string", "enum": ["stable", "beta", "canary", "pinned"], "default": "stable" },
+              "active_release_id": { "type": "string" },
+              "last_healthy_release_id": { "type": "string" },
+              "last_rollout_at": { "type": "string" },
+              "sandbox": {
+                "type": "object",
+                "properties": {
+                  "enabled": { "type": "boolean", "default": true },
+                  "root_dir": { "type": "string" },
+                  "sanitize_env": { "type": "boolean", "default": true },
+                  "allow_network": { "type": "boolean", "default": true }
+                }
+              },
+              "health_gate": {
+                "type": "object",
+                "properties": {
+                  "enabled": { "type": "boolean", "default": true },
+                  "auto_rollback": { "type": "boolean", "default": true }
+                }
+              },
+              "releases": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["id", "version", "channel", "command", "created_at"],
+                  "properties": {
+                    "id": { "type": "string" },
+                    "version": { "type": "string" },
+                    "channel": { "type": "string", "enum": ["stable", "beta", "canary", "pinned"] },
+                    "command": { "type": "string" },
+                    "args": { "type": "array", "items": { "type": "string" } },
+                    "env": { "type": "object", "additionalProperties": { "type": "string" } },
+                    "created_at": { "type": "string" },
+                    "status": { "type": "string", "enum": ["active", "healthy", "candidate", "failed", "rolled_back"] },
+                    "notes": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
           "replicas": { "type": "array", "items": { "type": "string", "format": "uri" }, "description": "Additional replica URLs (HTTP only)" },
           "timeout_ms": { "type": "integer", "default": 30000, "minimum": 100 },
           "cache": {
@@ -252,7 +299,182 @@
     "admin": {
       "type": "object",
       "properties": {
-        "key": { "type": "string", "description": "Bearer token for admin API protection" }
+        "key": { "type": "string", "description": "Bearer token for admin API protection" },
+        "allow_private_networks": {
+          "type": "boolean",
+          "default": false,
+          "description": "Explicitly allow private or loopback upstream URLs for dynamic admin imports and registrations"
+        }
+      }
+    },
+    "connect": {
+      "type": "object",
+      "description": "Connect/distribution profiles and official registry library settings",
+      "properties": {
+        "profiles": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "server_ids"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^[a-zA-Z0-9-]+$" },
+              "label": { "type": "string" },
+              "description": { "type": "string" },
+              "server_ids": {
+                "type": "array",
+                "items": { "type": "string" },
+                "minItems": 1
+              }
+            }
+          }
+        },
+        "registry": {
+          "type": "object",
+          "properties": {
+            "base_url": { "type": "string", "format": "uri", "description": "Upstream MCP registry base URL" },
+            "cache_ttl_seconds": { "type": "integer", "minimum": 1, "default": 3600 },
+            "page_size": { "type": "integer", "minimum": 1, "maximum": 200, "default": 100 },
+            "max_pages": { "type": "integer", "minimum": 0, "maximum": 1000, "default": 0, "description": "0 follows the registry cursor until exhaustion" },
+            "latest_only": { "type": "boolean", "default": true }
+          }
+        },
+        "managed_runtime": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "root_dir": { "type": "string", "default": "./.conduit/runtime" },
+            "default_channel": { "type": "string", "enum": ["stable", "beta", "canary", "pinned"], "default": "stable" },
+            "sanitize_env": { "type": "boolean", "default": true },
+            "auto_rollback": { "type": "boolean", "default": true }
+          }
+        }
+      }
+    },
+    "identity": {
+      "type": "object",
+      "description": "Workspace identity mappings and connected account broker",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "db_path": { "type": "string", "default": "./conduit-identity.db" },
+        "default_workspace_id": { "type": "string", "default": "default" },
+        "workspaces": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^[a-zA-Z0-9-]+$" },
+              "tenant_ids": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "governance": {
+      "type": "object",
+      "description": "Enterprise governance plane: RBAC, approvals, quotas, audit and registry policies",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "db_path": { "type": "string", "default": "./conduit-governance.db" },
+        "registry_default_action": { "type": "string", "enum": ["allow", "deny"], "default": "allow" },
+        "role_bindings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["workspace_id", "role", "clients"],
+            "properties": {
+              "workspace_id": { "type": "string", "pattern": "^[a-zA-Z0-9-]+$" },
+              "role": { "type": "string", "enum": ["owner", "admin", "approver", "operator", "developer", "viewer"] },
+              "clients": {
+                "type": "array",
+                "items": { "type": "string" },
+                "minItems": 1
+              }
+            }
+          }
+        },
+        "tool_policies": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "effect"],
+            "properties": {
+              "name": { "type": "string" },
+              "workspace_ids": { "type": "array", "items": { "type": "string" } },
+              "roles": {
+                "type": "array",
+                "items": { "type": "string", "enum": ["owner", "admin", "approver", "operator", "developer", "viewer"] }
+              },
+              "clients": { "type": "array", "items": { "type": "string" } },
+              "servers": { "type": "array", "items": { "type": "string" } },
+              "tools": { "type": "array", "items": { "type": "string" } },
+              "effect": { "type": "string", "enum": ["allow", "deny", "require_approval"] },
+              "reason": { "type": "string" }
+            }
+          }
+        },
+        "registry_policies": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "effect"],
+            "properties": {
+              "name": { "type": "string" },
+              "workspace_ids": { "type": "array", "items": { "type": "string" } },
+              "roles": {
+                "type": "array",
+                "items": { "type": "string", "enum": ["owner", "admin", "approver", "operator", "developer", "viewer"] }
+              },
+              "clients": { "type": "array", "items": { "type": "string" } },
+              "server_names": { "type": "array", "items": { "type": "string" } },
+              "package_types": { "type": "array", "items": { "type": "string" } },
+              "install_modes": { "type": "array", "items": { "type": "string", "enum": ["remote", "package"] } },
+              "effect": { "type": "string", "enum": ["allow", "deny"] },
+              "reason": { "type": "string" }
+            }
+          }
+        },
+        "quotas": {
+          "type": "object",
+          "properties": {
+            "default": {
+              "type": "object",
+              "properties": {
+                "requests_per_minute": { "type": "integer", "minimum": 1 },
+                "requests_per_hour": { "type": "integer", "minimum": 1 },
+                "requests_per_day": { "type": "integer", "minimum": 1 }
+              }
+            },
+            "workspaces": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["workspace_id"],
+                "properties": {
+                  "workspace_id": { "type": "string", "pattern": "^[a-zA-Z0-9-]+$" },
+                  "requests_per_minute": { "type": "integer", "minimum": 1 },
+                  "requests_per_hour": { "type": "integer", "minimum": 1 },
+                  "requests_per_day": { "type": "integer", "minimum": 1 }
+                }
+              }
+            }
+          }
+        },
+        "approvals": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "ttl_seconds": { "type": "integer", "minimum": 1, "default": 3600 },
+            "required_roles": {
+              "type": "array",
+              "items": { "type": "string", "enum": ["owner", "admin", "approver", "operator", "developer", "viewer"] }
+            },
+            "allow_self_approval": { "type": "boolean", "default": false }
+          }
+        }
       }
     },
     "plugins": {

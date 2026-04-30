@@ -307,4 +307,113 @@ describe('CircuitBreaker', () => {
       expect(cb.getState().state).toBe('open');
     });
   });
+
+  // ── Audit High 3.2 #3 — default-config deadlock fix ─────────────────────────
+  // Prior to the fix, the default config (half_open_max_requests=1,
+  // success_threshold=2) deadlocked: after one successful probe in half-open,
+  // halfOpenRequests=1 saturated the cap so no second probe could pass, and
+  // the success counter could never reach the threshold to close the circuit.
+  describe('half-open recovery with default config (audit High 3.2 #3)', () => {
+    it('closes the circuit after enough successes even with halfOpenMax=1, threshold=2', () => {
+      const cb = makeCB({
+        failure_threshold: 1,
+        reset_timeout_ms: 1_000,
+        half_open_max_requests: 1,
+        success_threshold: 2,
+      });
+      cb.onFailure();
+      expect(cb.getState().state).toBe('open');
+
+      vi.advanceTimersByTime(1_001);
+
+      // First probe transitions to half-open and is allowed
+      expect(cb.canExecute()).toBe(true);
+      expect(cb.getState().state).toBe('half-open');
+      cb.onSuccess();
+      // Without the fix: 2nd canExecute() would return false (deadlock).
+      expect(cb.canExecute()).toBe(true);
+      cb.onSuccess();
+      expect(cb.getState().state).toBe('closed');
+    });
+
+    it('exposed default-config deadlock: 1 success then no further probe pre-fix', () => {
+      // Same scenario, but verify the in-flight counter is correctly released
+      // after a success so the half-open state never refuses a probe when
+      // none is actually in flight.
+      const cb = makeCB({
+        failure_threshold: 1,
+        reset_timeout_ms: 100,
+        half_open_max_requests: 1,
+        success_threshold: 3,
+      });
+      cb.onFailure();
+      vi.advanceTimersByTime(101);
+
+      for (let i = 0; i < 3; i++) {
+        expect(cb.canExecute()).toBe(true);
+        cb.onSuccess();
+      }
+      expect(cb.getState().state).toBe('closed');
+    });
+
+    it('keeps the in-flight cap honored under concurrent probes', () => {
+      // The fix decrements halfOpenRequests on completion; a probe that has
+      // not yet completed must still count toward the cap. This guards against
+      // accidentally turning halfOpenMaxRequests into "total" instead of
+      // "concurrent" probes.
+      const cb = makeCB({
+        failure_threshold: 1,
+        reset_timeout_ms: 100,
+        half_open_max_requests: 2,
+        success_threshold: 5,
+      });
+      cb.onFailure();
+      vi.advanceTimersByTime(101);
+
+      // Two concurrent probes — both allowed, none complete yet
+      expect(cb.canExecute()).toBe(true);
+      expect(cb.canExecute()).toBe(true);
+      // Third concurrent probe is rejected (cap)
+      expect(cb.canExecute()).toBe(false);
+
+      // Complete one — slot frees up
+      cb.onSuccess();
+      expect(cb.canExecute()).toBe(true);
+    });
+
+    it('failure during half-open still reopens regardless of in-flight count', () => {
+      const cb = makeCB({
+        failure_threshold: 1,
+        reset_timeout_ms: 100,
+        half_open_max_requests: 3,
+        success_threshold: 5,
+      });
+      cb.onFailure();
+      vi.advanceTimersByTime(101);
+      cb.canExecute();
+      cb.canExecute();
+      cb.canExecute();
+      expect(cb.getState().state).toBe('half-open');
+      cb.onFailure();
+      expect(cb.getState().state).toBe('open');
+    });
+
+    it('success in CLOSED state does not push halfOpenRequests below zero', () => {
+      // Defensive: onSuccess in closed state must not corrupt counters.
+      const cb = makeCB({
+        failure_threshold: 1,
+        reset_timeout_ms: 100,
+        half_open_max_requests: 1,
+        success_threshold: 1,
+      });
+      cb.onSuccess();
+      cb.onSuccess();
+      cb.onSuccess();
+      // After plenty of successes in closed state, half-open transition still
+      // works as expected.
+      cb.onFailure();
+      vi.advanceTimersByTime(101);
+      expect(cb.canExecute()).toBe(true);
+    });
+  });
 });

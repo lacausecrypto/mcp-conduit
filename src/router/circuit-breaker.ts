@@ -80,6 +80,13 @@ export class CircuitBreaker {
   /**
    * Record a successful request.
    * In half-open state: accumulates successes toward closing the circuit.
+   *
+   * `halfOpenRequests` tracks probes currently *in flight*: every canExecute()
+   * that returned true increments it, every onSuccess()/onFailure() releases
+   * a slot so subsequent probes can pass. Without this release, a default
+   * config with half_open_max_requests=1 and success_threshold=2 would
+   * deadlock at 1 in-flight + 1 pending success — the circuit could never
+   * accumulate enough successes to close.
    */
   onSuccess(): void {
     switch (this.state) {
@@ -90,6 +97,7 @@ export class CircuitBreaker {
 
       case 'half-open':
         this.successCount++;
+        if (this.halfOpenRequests > 0) this.halfOpenRequests--;
         if (this.successCount >= this.successThreshold) {
           this.state = 'closed';
           this.failureCount = 0;

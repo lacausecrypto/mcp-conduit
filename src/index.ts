@@ -4,6 +4,7 @@
  * Charge la configuration, initialise la passerelle, et démarre les serveurs HTTP.
  */
 
+import { timingSafeEqual } from 'node:crypto';
 import { loadConfigFromEnv } from './config/loader.js';
 import { ConduitGateway } from './gateway/gateway.js';
 import { getMetrics, resetMetrics } from './observability/metrics.js';
@@ -32,6 +33,11 @@ if (command === 'init') {
     console.error('Init failed:', err);
     process.exit(1);
   });
+} else if (command === 'connect') {
+  import('./cli/connect.js').then((m) => m.runConnect(process.argv.slice(3))).catch((err) => {
+    console.error('Connect failed:', err);
+    process.exit(1);
+  });
   // Don't run main() — init is a separate flow
 } else if (command === '--help' || command === '-h') {
   console.log(`
@@ -40,6 +46,7 @@ if (command === 'init') {
   Usage:
     conduit              Start the gateway (reads conduit.config.yml)
     conduit init         Interactive config wizard
+    conduit connect      Export MCP client snippets for IDEs and agents
     conduit --help       Show this help
 
   Environment:
@@ -90,8 +97,31 @@ async function main(): Promise<void> {
   if (config.metrics.enabled) {
     const metrics = getMetrics();
     const metricsApp = new Hono();
+    const metricsRequireAuth = config.metrics.require_auth === true;
+    const metricsAdminKey = config.admin?.key;
+
+    if (metricsRequireAuth && !metricsAdminKey) {
+      console.error(
+        '[Conduit] metrics.require_auth is enabled but admin.key is not set — refusing to start an unprotected metrics endpoint.',
+      );
+      process.exit(1);
+    }
 
     metricsApp.get('/', async (c) => {
+      if (metricsRequireAuth && metricsAdminKey) {
+        const authHeader = c.req.header('authorization') ?? '';
+        const provided = authHeader.startsWith('Bearer ')
+          ? authHeader.slice(7)
+          : (c.req.header('x-admin-key') ?? '');
+        // timing-safe comparison to avoid leaking the admin key via response latency.
+        const providedBuf = Buffer.from(provided);
+        const expectedBuf = Buffer.from(metricsAdminKey);
+        const ok = providedBuf.length === expectedBuf.length &&
+          timingSafeEqual(providedBuf, expectedBuf);
+        if (!ok) {
+          return c.json({ error: 'Unauthorized' }, 401);
+        }
+      }
       try {
         const metricsText = await metrics.getMetrics();
         return c.text(metricsText, 200, {
@@ -106,7 +136,10 @@ async function main(): Promise<void> {
       fetch: metricsApp.fetch,
       port: config.metrics.port,
     }, (info) => {
-      console.log(`[Conduit] Métriques Prometheus exposées sur le port ${info.port}`);
+      console.log(
+        `[Conduit] Métriques Prometheus exposées sur le port ${info.port}` +
+        (metricsRequireAuth ? ' (auth required)' : ''),
+      );
     });
   }
 
@@ -156,8 +189,10 @@ async function main(): Promise<void> {
   // ── Startup summary ──────────────────────────────────────────────────────
   const authMethod = config.auth?.method ?? 'none';
   const adminKeySet = !!config.admin?.key;
+  const identityEnabled = !!config.identity?.enabled;
   console.log('[Conduit] ─────────────────────────────────────────');
   console.log(`[Conduit] Auth:          ${authMethod}`);
+  console.log(`[Conduit] Identity:      ${identityEnabled ? 'enabled' : 'disabled'}`);
   console.log(`[Conduit] Cache:         ${config.cache.enabled ? `enabled (L1 ${config.cache.l1.max_entries} entries)` : 'disabled'}`);
   console.log(`[Conduit] Rate limiting: ${config.rate_limits?.enabled ? 'enabled' : 'disabled'}`);
   console.log(`[Conduit] ACL:           ${config.acl?.enabled ? 'enabled' : 'disabled'}`);

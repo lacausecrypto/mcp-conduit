@@ -10,6 +10,7 @@
 
 import { existsSync, unlinkSync } from 'node:fs';
 import Database from 'better-sqlite3';
+import { hardenSqliteFilePermissions } from '../utils/db-hardening.js';
 import type { LogEntry, LogFilters, LogStats, CacheLogStatus } from './types.js';
 
 /** Schéma de création de la table de logs */
@@ -100,6 +101,7 @@ export class LogStore {
       db.pragma('journal_mode = WAL');
       db.pragma('synchronous = NORMAL');
       db.exec(CREATE_TABLE_SQL);
+      hardenSqliteFilePermissions(dbPath);
       return db;
     } catch (err) {
       console.warn(
@@ -120,6 +122,7 @@ export class LogStore {
       db.pragma('journal_mode = WAL');
       db.pragma('synchronous = NORMAL');
       db.exec(CREATE_TABLE_SQL);
+      hardenSqliteFilePermissions(dbPath);
       return db;
     }
   }

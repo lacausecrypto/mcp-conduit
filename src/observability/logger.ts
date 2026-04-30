@@ -6,7 +6,7 @@
 
 import type { LogEntry, RequestStatus, CacheLogStatus } from './types.js';
 import type { LogStore } from './log-store.js';
-import type { ConduitMetrics } from './metrics.js';
+import { sanitizeMetricLabel, type ConduitMetrics } from './metrics.js';
 import { redact } from './redactor.js';
 import { sanitizeArgs } from '../utils/sanitize.js';
 
@@ -112,20 +112,26 @@ export class ConduitLogger {
       console.error('[Conduit] Erreur lors de la journalisation :', error);
     }
 
-    // Mise à jour des métriques Prometheus
+    // Mise à jour des métriques Prometheus.
+    // tool/method come from the upstream payload and are user-influenced;
+    // sanitizeMetricLabel caps length and charset so a hostile caller cannot
+    // inflate cardinality by submitting unique tool names per request.
+    const safeServer = sanitizeMetricLabel(context.serverId);
+    const safeMethod = sanitizeMetricLabel(context.method);
+    const safeTool = sanitizeMetricLabel(context.toolName);
     this.metrics.requestsTotal.inc({
-      server: context.serverId,
-      method: context.method,
-      tool: context.toolName ?? '',
+      server: safeServer,
+      method: safeMethod,
+      tool: safeTool,
       status: result.status,
       cache_status: result.cacheStatus ?? '',
     });
 
     this.metrics.requestDurationSeconds.observe(
       {
-        server: context.serverId,
-        method: context.method,
-        tool: context.toolName ?? '',
+        server: safeServer,
+        method: safeMethod,
+        tool: safeTool,
       },
       durationMs / 1000,
     );
@@ -135,20 +141,20 @@ export class ConduitLogger {
     // Compteurs de cache
     if (result.cacheStatus === 'HIT') {
       this.metrics.cacheHitsTotal.inc({
-        server: context.serverId,
-        tool: context.toolName ?? '',
+        server: safeServer,
+        tool: safeTool,
       });
     } else if (result.cacheStatus === 'MISS') {
       this.metrics.cacheMissesTotal.inc({
-        server: context.serverId,
-        tool: context.toolName ?? '',
+        server: safeServer,
+        tool: safeTool,
       });
     }
 
     // Compteur d'erreurs
     if (result.status === 'error') {
       this.metrics.errorsTotal.inc({
-        server: context.serverId,
+        server: safeServer,
         type: result.errorCode === -32603 ? 'upstream_error' : 'internal',
       });
     }

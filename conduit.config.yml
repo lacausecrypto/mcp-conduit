@@ -16,7 +16,8 @@
 # Environment variables (take precedence over this file):
 #   CONDUIT_PORT, CONDUIT_HOST, CONDUIT_ADMIN_KEY, CONDUIT_DB_PATH,
 #   CONDUIT_METRICS_PORT, CONDUIT_TLS_ENABLED, CONDUIT_TLS_CERT,
-#   CONDUIT_TLS_KEY, CONDUIT_REDIS_URL, CONDUIT_LOG_ARGS
+#   CONDUIT_TLS_KEY, CONDUIT_REDIS_URL, CONDUIT_LOG_ARGS,
+#   CONDUIT_GOVERNANCE_DB_PATH
 # ==============================================================
 
 
@@ -26,7 +27,7 @@
 # -------------------------------------------------------------
 gateway:
   port: 8080          # TCP port. Override: CONDUIT_PORT
-  host: "0.0.0.0"    # "0.0.0.0" = all interfaces. Override: CONDUIT_HOST
+  host: "127.0.0.1"  # Safer default for local use. Use "0.0.0.0" only if you intend network exposure.
 
   # Native TLS (optional)
   # If you use a reverse proxy (nginx, Caddy, Traefik) in front,
@@ -337,6 +338,99 @@ metrics:
 # -------------------------------------------------------------
 # admin:
 #   key: ""    # Override (recommended): CONDUIT_ADMIN_KEY
+
+
+# -------------------------------------------------------------
+# CONNECT / REGISTRY LIBRARY
+# Profiles exported to IDEs plus the upstream official MCP Registry
+# ingestion used by the dashboard library.
+# -------------------------------------------------------------
+# connect:
+#   profiles:
+#     - id: "engineering"
+#       label: "Engineering"
+#       description: "Selected Conduit-managed MCP servers for engineering clients."
+#       server_ids:
+#         - "github"
+#
+#   registry:
+#     base_url: "https://registry.modelcontextprotocol.io"
+#     cache_ttl_seconds: 3600
+#     page_size: 100
+#     max_pages: 0
+#     latest_only: true
+#
+#   managed_runtime:
+#     enabled: true
+#     root_dir: "./.conduit/runtime"
+#     default_channel: "stable"
+#     sanitize_env: true
+#     auto_rollback: true
+
+
+# -------------------------------------------------------------
+# IDENTITY PLANE
+# Maps authenticated tenants to workspaces and stores connected accounts
+# used by Conduit to broker upstream credentials.
+# -------------------------------------------------------------
+# identity:
+#   enabled: true
+#   db_path: "./conduit-identity.db"
+#   default_workspace_id: "default"
+#   workspaces:
+#     - id: "workspace-a"
+#       tenant_ids:
+#         - "dev-org"
+#
+# -------------------------------------------------------------
+# GOVERNANCE PLANE
+# Enterprise controls on top of Conduit-managed MCP usage:
+# RBAC, workspace policies, registry allow/block, quotas, audit and approvals.
+# -------------------------------------------------------------
+# governance:
+#   enabled: true
+#   db_path: "./conduit-governance.db"   # Override: CONDUIT_GOVERNANCE_DB_PATH
+#   registry_default_action: "allow"     # "allow" | "deny"
+#
+#   role_bindings:
+#     - workspace_id: "workspace-a"
+#       role: "developer"                # owner | admin | approver | operator | developer | viewer
+#       clients:
+#         - "agent-dev-*"
+#     - workspace_id: "workspace-a"
+#       role: "approver"
+#       clients:
+#         - "agent-admin"
+#
+#   tool_policies:
+#     - name: "prod-destructive-approval"
+#       workspace_ids: ["workspace-a"]
+#       roles: ["developer"]
+#       servers: ["github", "salesforce"]
+#       tools: ["delete_*", "create_*", "update_*"]
+#       effect: "require_approval"       # allow | deny | require_approval
+#       reason: "Write access requires approval in workspace-a"
+#
+#   registry_policies:
+#     - name: "block-unapproved-registry"
+#       workspace_ids: ["workspace-a"]
+#       server_names: ["community/*", "unverified/*"]
+#       effect: "deny"                   # allow | deny
+#       reason: "Only approved registry entries may be imported"
+#
+#   quotas:
+#     default:
+#       requests_per_minute: 120
+#     workspaces:
+#       - workspace_id: "workspace-a"
+#         requests_per_minute: 60
+#         requests_per_hour: 1000
+#
+#   approvals:
+#     enabled: true
+#     ttl_seconds: 3600
+#     required_roles: ["owner", "admin", "approver"]
+#     allow_self_approval: false
 
 
 # -------------------------------------------------------------

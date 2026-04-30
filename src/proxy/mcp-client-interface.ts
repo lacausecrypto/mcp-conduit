@@ -44,4 +44,11 @@ export interface IMcpClient {
 
   /** URL du serveur (ou identifiant pour stdio). */
   readonly serverUrl: string;
+
+  /**
+   * Libère les ressources du client (process stdio, connexions HTTP).
+   * Appelé lors de l'arrêt propre du gateway. Optionnel : les transports
+   * qui n'ont rien à libérer peuvent ne pas l'implémenter.
+   */
+  shutdown?(): Promise<void>;
 }

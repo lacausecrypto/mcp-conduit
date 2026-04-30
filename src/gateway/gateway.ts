@@ -13,7 +13,7 @@ import { resolve as resolvePath } from 'node:path';
 import { createServer as createHttpsServer } from 'node:https';
 import { serve, type ServerType } from '@hono/node-server';
 import { Hono } from 'hono';
-import { load as yamlLoad } from 'js-yaml';
+import { safeYamlLoad } from '../utils/yaml-safe.js';
 import { mergeWithDefaults, validateConfig, formatConfigErrors } from '../config/schema.js';
 import type { ConduitGatewayConfig } from '../config/types.js';
 import type { JsonRpcMessage } from '../proxy/json-rpc.js';
@@ -42,6 +42,10 @@ import { DiscoveryManager } from '../discovery/manager.js';
 import { HttpRegistryBackend } from '../discovery/http-registry.js';
 import { DnsDiscoveryBackend } from '../discovery/dns-discovery.js';
 import type { DiscoveryBackend } from '../discovery/types.js';
+import { IdentityStore } from '../identity/store.js';
+import { IdentityRuntime } from '../identity/runtime.js';
+import { GovernanceStore } from '../governance/store.js';
+import { GovernanceRuntime } from '../governance/runtime.js';
 
 /**
  * Interface exposée au transport pour déléguer le traitement des requêtes.
@@ -65,6 +69,10 @@ export class ConduitGateway implements GatewayCore {
   private readonly router: ConduitRouter;
   private readonly pipeline: RequestPipeline;
   private readonly logStore: LogStore;
+  private readonly identityStore: IdentityStore | null;
+  private readonly identityRuntime: IdentityRuntime;
+  private readonly governanceStore: GovernanceStore | null;
+  private readonly governanceRuntime: GovernanceRuntime;
   private readonly logger: ConduitLogger;
   private readonly rateLimiter: RateLimiter | null;
   private redisLimiter: RedisLimiter | null = null;
@@ -94,6 +102,14 @@ export class ConduitGateway implements GatewayCore {
       config.observability.db_path,
       config.observability.retention_days,
     );
+    this.identityStore = config.identity?.enabled
+      ? new IdentityStore(config.identity.db_path ?? './conduit-identity.db')
+      : null;
+    this.identityRuntime = new IdentityRuntime(config, this.identityStore);
+    this.governanceStore = config.governance?.enabled
+      ? new GovernanceStore(config.governance.db_path ?? './conduit-governance.db')
+      : null;
+    this.governanceRuntime = new GovernanceRuntime(config, this.identityRuntime, this.governanceStore);
 
     // Logger structuré
     this.logger = new ConduitLogger(this.logStore, metrics, {
@@ -120,6 +136,8 @@ export class ConduitGateway implements GatewayCore {
       this.logger,
       metrics,
       config,
+      this.identityRuntime,
+      this.governanceRuntime,
       this.rateLimiter ?? undefined,
     );
   }
@@ -148,6 +166,12 @@ export class ConduitGateway implements GatewayCore {
         if (this.rateLimiter) {
           (this.rateLimiter as unknown as { limiter: RedisLimiter }).limiter = redisBacked;
         }
+
+        // Reuse the same Redis backend for governance workspace quotas so
+        // they are enforced globally across pods (cf. audit Sprint 3 #5).
+        // Without this, each pod tracks its own counter and a workspace
+        // effectively gets `pods × limit` per minute.
+        this.governanceRuntime.setQuotaBackend(redisBacked);
 
         console.log('[Conduit] Rate limiting: Redis backend connected');
       } catch (error) {
@@ -279,7 +303,7 @@ export class ConduitGateway implements GatewayCore {
     // ── 2. Parse YAML ───────────────────────────────────────────────────────
     let parsed: unknown;
     try {
-      parsed = yamlLoad(rawContent);
+      parsed = safeYamlLoad(rawContent);
     } catch (err) {
       errors.push(`YAML parse error: ${String(err)}`);
       return { reloaded, skipped, errors };
@@ -369,6 +393,20 @@ export class ConduitGateway implements GatewayCore {
         delete this.config.guardrails;
       }
       reloaded.push('guardrails');
+    }
+
+    if (
+      newConfig.governance?.enabled !== this.config.governance?.enabled ||
+      newConfig.governance?.db_path !== this.config.governance?.db_path
+    ) {
+      skipped.push('governance.enabled/db_path (restart required)');
+    } else if (JSON.stringify(newConfig.governance) !== JSON.stringify(this.config.governance)) {
+      if (newConfig.governance !== undefined) {
+        this.config.governance = newConfig.governance;
+      } else {
+        delete this.config.governance;
+      }
+      reloaded.push('governance');
     }
 
     // Rate limit configuration
@@ -499,6 +537,10 @@ export class ConduitGateway implements GatewayCore {
       (configPath?: string) => this.reload(configPath),
       this.redisCacheStore ?? undefined,
       this.httpRegistryBackend ?? undefined,
+      this.identityRuntime,
+      this.identityStore ?? undefined,
+      this.governanceRuntime,
+      this.governanceStore ?? undefined,
     );
     app.route('/conduit', adminRouter);
 
@@ -555,6 +597,24 @@ export class ConduitGateway implements GatewayCore {
       }
       this.redisCacheStore = null;
     }
+
+    // Shutdown MCP clients (stdio processes, HTTP sessions). This prevents
+    // orphaned child processes after the gateway stops accepting work. We
+    // run them in parallel and swallow per-client errors so one hung client
+    // cannot block the drain path.
+    await Promise.all(
+      Array.from(this.clients.values()).map(async (client) => {
+        if (typeof client.shutdown !== 'function') return;
+        try {
+          await client.shutdown();
+        } catch (err) {
+          console.warn(
+            `[Conduit] Error shutting down client "${client.serverId}":`,
+            err instanceof Error ? err.message : err,
+          );
+        }
+      }),
+    );
 
     // Drain the HTTP server: stop accepting new connections and wait for
     // existing ones to finish (up to drainTimeoutMs).

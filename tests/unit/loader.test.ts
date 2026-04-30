@@ -144,7 +144,7 @@ describe('loadConfigFromEnv - zero-config mode', () => {
     const { loadConfigFromEnv } = await import('../../src/config/loader.js');
     const config = loadConfigFromEnv();
     expect(config.gateway.port).toBe(8080);
-    expect(config.gateway.host).toBe('0.0.0.0');
+    expect(config.gateway.host).toBe('127.0.0.1');
   });
 
   it('applies CONDUIT_PORT override in zero-config mode', async () => {

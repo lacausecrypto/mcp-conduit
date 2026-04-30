@@ -40,6 +40,8 @@ function deleteTempConfig(path: string): void {
 // Build a minimal valid YAML config that references a real (mock) server URL
 function buildYaml(serverUrl: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
+    // Tests bind to 0.0.0.0; opt out of the admin-key-required check.
+    admin: { allow_unauthenticated: true },
     gateway: { port: 8080, host: '0.0.0.0' },
     router: {
       namespace_strategy: 'none',
@@ -328,6 +330,103 @@ describe('Hot-reload config', () => {
   });
 
   // ── Admin API endpoint ─────────────────────────────────────────────────────
+
+  // ── Audit 3.1#14 — mid-reload in-flight requests ─────────────────────────
+
+  describe('Mid-reload in-flight requests', () => {
+    it('in-flight requests during a reload either succeed or return a clean error (never hang)', async () => {
+      const serverUrl = ctx.mockServer.url;
+
+      // Fire 20 in-flight requests, then trigger a reload of a benign change
+      // (rate-limit toggle) and a new request stream — verify all settle in
+      // bounded time without 500s.
+      const configPath = writeTempConfig(buildYaml(serverUrl, {
+        rate_limits: {
+          enabled: true,
+          backend: 'memory',
+          per_client: { requests_per_minute: 1000 },
+        },
+      }));
+      tmpFiles.push(configPath);
+
+      const inflight: Promise<Response>[] = [];
+      for (let i = 0; i < 20; i++) {
+        inflight.push(sendMcpRequest(ctx.app, 'test-server', makeToolCallMessage('get_contact', { id: `mid-reload-${i}` })));
+      }
+
+      // Kick off the reload while requests are in flight.
+      const reloadResult = ctx.gateway.reload(configPath);
+
+      const [reload, ...settled] = await Promise.all([reloadResult, ...inflight]);
+
+      // Reload must complete cleanly.
+      expect(reload.errors).toEqual([]);
+
+      // Each in-flight request returned a 2xx OR a JSON-RPC envelope error.
+      // What we forbid: a hang (no settled promise) or a 5xx transport error.
+      for (const res of settled) {
+        expect([200, 207]).toContain(res.status);
+        const body = await res.clone().json() as Record<string, unknown>;
+        // Either valid result OR a JSON-RPC error — both acceptable.
+        const hasResultOrError = 'result' in body || 'error' in body;
+        expect(hasResultOrError).toBe(true);
+      }
+    });
+
+    it('a reload that adds a new server while the old server is mid-request keeps the old request reachable', async () => {
+      const serverUrl = ctx.mockServer.url;
+
+      const reqPromise = sendMcpRequest(ctx.app, 'test-server', makeToolCallMessage('get_contact', { id: 'concurrent-add' }));
+
+      // Reload with the original server PLUS a new (unreachable) one — the
+      // original test-server stays in the registry; the unreachable one will
+      // not affect the in-flight tools/call routed to test-server.
+      const configPath = writeTempConfig(buildYaml(serverUrl, {
+        servers: [
+          { id: 'test-server', url: serverUrl, cache: { default_ttl: 300 } },
+          { id: 'extra-server', url: 'http://127.0.0.1:1', cache: { default_ttl: 300 } },
+        ],
+      }));
+      tmpFiles.push(configPath);
+
+      const [reqRes, reload] = await Promise.all([reqPromise, ctx.gateway.reload(configPath)]);
+
+      expect(reqRes.status).toBe(200);
+      // Reload may or may not include the add depending on whether the diff
+      // was treated as additive — the contract here is "no errors propagated".
+      expect(reload.errors).toEqual([]);
+    });
+
+    it('multiple successive reloads while traffic flows do not crash the gateway', async () => {
+      const serverUrl = ctx.mockServer.url;
+      const configPath = writeTempConfig(buildYaml(serverUrl, {
+        rate_limits: {
+          enabled: true,
+          backend: 'memory',
+          per_client: { requests_per_minute: 5000 },
+        },
+      }));
+      tmpFiles.push(configPath);
+
+      // Fire 10 reloads in quick succession.
+      const reloads = Array.from({ length: 10 }, () => ctx.gateway.reload(configPath));
+      // While reloads are happening, fire 30 requests.
+      const traffic = Array.from({ length: 30 }, (_, i) =>
+        sendMcpRequest(ctx.app, 'test-server', makeToolCallMessage('get_contact', { id: `reload-spam-${i}` })),
+      );
+      const [reloadResults, trafficResults] = await Promise.all([
+        Promise.all(reloads),
+        Promise.all(traffic),
+      ]);
+
+      for (const r of reloadResults) {
+        expect(r.errors).toEqual([]);
+      }
+      for (const res of trafficResults) {
+        expect([200, 207]).toContain(res.status);
+      }
+    });
+  });
 
   describe('POST /conduit/config/reload endpoint', () => {
     it('returns 200 with reload report when config is valid', async () => {

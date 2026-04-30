@@ -87,10 +87,15 @@ export class McpClient implements IMcpClient {
   }
 
   private async _doForward(options: UpstreamRequestOptions): Promise<UpstreamResponse> {
+    const notificationRequest = isJsonRpcNotification(options.body);
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'Accept': 'application/json, text/event-stream',
     };
+
+    if (this.server.headers) {
+      Object.assign(headers, this.server.headers);
+    }
 
     // Propagation du session ID MCP si disponible
     const effectiveSessionId = options.sessionId ?? this.sessionId;
@@ -142,10 +147,28 @@ export class McpClient implements IMcpClient {
       };
     }
 
+    const text = await response.text();
+    if (!text.trim()) {
+      return {
+        body: null,
+        status: response.status,
+        headers: responseHeaders,
+        isStream: false,
+      };
+    }
+
     let body: unknown;
     try {
-      body = await response.json() as unknown;
+      body = JSON.parse(text) as unknown;
     } catch {
+      if (notificationRequest && response.ok) {
+        return {
+          body: null,
+          status: response.status,
+          headers: responseHeaders,
+          isStream: false,
+        };
+      }
       throw new Error(
         `Le serveur en amont "${this.server.id}" a retourné une réponse non-JSON (HTTP ${response.status})`,
       );
@@ -169,6 +192,10 @@ export class McpClient implements IMcpClient {
     const headers: Record<string, string> = {
       'Accept': 'text/event-stream',
     };
+
+    if (this.server.headers) {
+      Object.assign(headers, this.server.headers);
+    }
 
     if (this.sessionId) {
       headers['Mcp-Session-Id'] = this.sessionId;
@@ -214,4 +241,17 @@ export class McpClient implements IMcpClient {
   get serverUrl(): string {
     return this.server.url;
   }
+}
+
+function isJsonRpcNotification(body: unknown): body is { jsonrpc: '2.0'; method: string } {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    return false;
+  }
+
+  const message = body as Record<string, unknown>;
+  return message['jsonrpc'] === '2.0'
+    && typeof message['method'] === 'string'
+    && message['id'] === undefined
+    && message['result'] === undefined
+    && message['error'] === undefined;
 }

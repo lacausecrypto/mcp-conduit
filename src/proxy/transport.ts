@@ -18,12 +18,18 @@ import type { Context } from 'hono';
 import { stream } from 'hono/streaming';
 import type { ConduitGatewayConfig } from '../config/types.js';
 import type { GatewayCore } from '../gateway/gateway.js';
+import { buildProfileTargetId } from '../connect/profile-target.js';
+import { resolveConnectProfile } from '../connect/export.js';
 import {
-  parseJsonRpc,
+  parseJsonRpcBatchPartial,
+  isInvalidBatchEntry,
+  isValidJsonRpc,
   buildJsonRpcError,
   buildJsonRpcResult,
   JSON_RPC_ERRORS,
+  MAX_BATCH_SIZE,
   type JsonRpcMessage,
+  type InvalidBatchEntry,
 } from './json-rpc.js';
 import { resolveTraceId, TRACE_HEADER } from '../observability/trace.js';
 
@@ -33,6 +39,13 @@ const SERVER_ID_HEADER = 'X-Conduit-Server-Id';
 
 /** Taille maximale du corps de requête pour éviter les attaques OOM (10 Mo) */
 const MAX_REQUEST_BODY_BYTES = 10 * 1024 * 1024;
+
+function isNotificationMessage(message: JsonRpcMessage): boolean {
+  return message.method !== undefined
+    && message.id === undefined
+    && message.result === undefined
+    && message.error === undefined;
+}
 
 /**
  * Crée l'application Hono de transport pour la passerelle.
@@ -55,6 +68,24 @@ export function createTransport(config: ConduitGatewayConfig, core: GatewayCore)
     }
 
     return handleMcpRequest(c, serverId, config, core);
+  });
+
+  /**
+   * POST /mcp/profile/:profileId — endpoint profil agrégé sous contrôle Conduit.
+   */
+  app.post('/mcp/profile/:profileId', async (c) => {
+    const profileId = c.req.param('profileId');
+
+    try {
+      resolveConnectProfile(config, profileId);
+    } catch {
+      return c.json(
+        buildJsonRpcError(null, JSON_RPC_ERRORS.METHOD_NOT_FOUND, `Profil inconnu : ${profileId}`),
+        404,
+      );
+    }
+
+    return handleMcpRequest(c, buildProfileTargetId(profileId), config, core);
   });
 
   /**
@@ -91,8 +122,12 @@ export function createTransport(config: ConduitGatewayConfig, core: GatewayCore)
 
     try {
       const extraHeaders: Record<string, string> = { [TRACE_HEADER]: traceId };
-      const authHeader = c.req.header('authorization');
-      if (authHeader) extraHeaders['Authorization'] = authHeader;
+      // Same forwarding policy as the JSON-RPC path: only propagate the
+      // client's Authorization header when this server explicitly opts in.
+      if (server.forward_authorization === true && !server.upstream_auth) {
+        const authHeader = c.req.header('authorization');
+        if (authHeader) extraHeaders['Authorization'] = authHeader;
+      }
 
       const upstreamResponse = await client.openSseStream(extraHeaders);
 
@@ -127,6 +162,19 @@ export function createTransport(config: ConduitGatewayConfig, core: GatewayCore)
       console.error(`[Conduit] Erreur SSE pour ${serverId} :`, error);
       return c.json({ error: 'Erreur interne du flux SSE' }, 500);
     }
+  });
+
+  app.get('/mcp/profile/:profileId', async (c) => {
+    const profileId = c.req.param('profileId');
+    try {
+      resolveConnectProfile(config, profileId);
+    } catch {
+      return c.json({ error: `Profil inconnu : ${profileId}` }, 404);
+    }
+
+    return c.json({
+      error: 'Profile endpoints use streamable HTTP over POST. Use POST /mcp/profile/:profileId.',
+    }, 405);
   });
 
   return app;
@@ -204,8 +252,34 @@ async function handleMcpRequest(
     return c.json(errResp, 400);
   }
 
-  const parsed = parseJsonRpc(rawBody);
-  if (parsed === null) {
+  // Two parsing modes:
+  //  - Batch (array body): use the permissive parser so a single malformed
+  //    entry produces a per-message Invalid Request error, conformément à
+  //    la spec JSON-RPC 2.0. Reject upfront if the batch exceeds the cap.
+  //  - Single message: keep the strict envelope check.
+  let parsed: JsonRpcMessage | Array<JsonRpcMessage | InvalidBatchEntry>;
+  if (Array.isArray(rawBody)) {
+    if (rawBody.length === 0 || rawBody.length > MAX_BATCH_SIZE) {
+      const errResp = buildJsonRpcError(
+        null,
+        JSON_RPC_ERRORS.INVALID_REQUEST,
+        rawBody.length === 0
+          ? 'Empty JSON-RPC batch'
+          : `JSON-RPC batch exceeds maximum size (${MAX_BATCH_SIZE})`,
+      );
+      c.header(TRACE_HEADER, traceId);
+      return c.json(errResp, 400);
+    }
+    const partial = parseJsonRpcBatchPartial(rawBody);
+    if (partial === null) {
+      const errResp = buildJsonRpcError(null, JSON_RPC_ERRORS.INVALID_REQUEST, 'Message JSON-RPC invalide');
+      c.header(TRACE_HEADER, traceId);
+      return c.json(errResp, 400);
+    }
+    parsed = partial;
+  } else if (isValidJsonRpc(rawBody)) {
+    parsed = rawBody;
+  } else {
     const errResp = buildJsonRpcError(null, JSON_RPC_ERRORS.INVALID_REQUEST, 'Message JSON-RPC invalide');
     c.header(TRACE_HEADER, traceId);
     return c.json(errResp, 400);
@@ -215,12 +289,19 @@ async function handleMcpRequest(
   const requestContext = buildRequestContext(headersObj, traceId);
 
   try {
-    // Traitement batch — traite chaque message indépendamment.
-    // Utilise Promise.allSettled pour retourner une réponse individuelle
-    // par message, même si certains échouent (conformité JSON-RPC 2.0).
+    // Traitement batch — chaque message est traité indépendamment.
+    // Les entrées invalides reçoivent immédiatement une erreur
+    // Invalid Request sans atteindre le pipeline.
     if (Array.isArray(parsed)) {
       const settled = await Promise.allSettled(
-        parsed.map(async (msg) => {
+        parsed.map(async (msg): Promise<JsonRpcMessage> => {
+          if (isInvalidBatchEntry(msg)) {
+            return buildJsonRpcError(
+              msg.id,
+              JSON_RPC_ERRORS.INVALID_REQUEST,
+              'Invalid JSON-RPC message in batch entry',
+            );
+          }
           const r = await core.handleRequest(serverId, msg, requestContext);
           return r.body as JsonRpcMessage;
         }),
@@ -231,11 +312,14 @@ async function handleMcpRequest(
           return outcome.value;
         }
         const failedMsg = parsed[idx]!;
+        const failedId = isInvalidBatchEntry(failedMsg)
+          ? failedMsg.id
+          : (failedMsg.id ?? null);
         const errorMessage = outcome.reason instanceof Error
           ? outcome.reason.message
           : 'Erreur interne';
         return buildJsonRpcError(
-          failedMsg.id ?? null,
+          failedId,
           JSON_RPC_ERRORS.INTERNAL_ERROR,
           errorMessage,
         );
@@ -286,6 +370,10 @@ async function handleMcpRequest(
       }, async (_err, str) => {
         await str.close();
       });
+    }
+
+    if (result.body === null && isNotificationMessage(parsed)) {
+      return c.body(null, 202);
     }
 
     return c.json(result.body);
